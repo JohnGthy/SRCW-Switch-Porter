@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <RootNamespace>SwitchPorter</RootNamespace>
+    <AssemblyName>SwitchPorter.Core</AssemblyName>
+    <NoWarn>CS8632;CS0168;CS0219</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Templates/*.uasset;Templates/*.uexp" LogicalName="%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../external/UAssetAPI/UAssetAPI/UAssetAPI.csproj" />
+    <ProjectReference Include="../../external/CUE4Parse/CUE4Parse/CUE4Parse.csproj" />
+  </ItemGroup>
+</Project>

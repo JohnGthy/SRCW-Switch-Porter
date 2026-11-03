@@ -1,0 +1,32 @@
+diff --git a/retoc/src/asset_conversion.rs b/retoc/src/asset_conversion.rs
+index 6d19b22..9061505 100644
+--- a/retoc/src/asset_conversion.rs
++++ b/retoc/src/asset_conversion.rs
+@@ -678,9 +678,26 @@ fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
+             builder.has_failed_import_map_entries = true;
+ 
+             // Insert the entry into the import map, and associate this import index with the null import
++            // SRCW-Switch-Porter patch: keep the package id + public export hash in the placeholder names so they can be resolved later
++            let (unk_pkg_name, unk_obj_name) = match import_object_index.package_import() {
++                Some(pi) if (pi.imported_package_index as usize) < builder.zen_package.imported_packages.len()
++                    && (pi.imported_public_export_hash_index as usize) < builder.zen_package.imported_public_export_hashes.len() => {
++                    let pid = builder.zen_package.imported_packages[pi.imported_package_index as usize];
++                    let h = builder.zen_package.imported_public_export_hashes[pi.imported_public_export_hash_index as usize];
++                    // use the real package name when the header carries it (UE5.3+), otherwise encode the id
++                    let pkg = builder.zen_package.imported_package_names.get(pi.imported_package_index as usize)
++                        .map(|n| n.to_string()).filter(|n| n.starts_with('/'))
++                        .unwrap_or_else(|| format!("/Engine/Unresolved_{:016x}", pid.0));
++                    (pkg, format!("UnresolvedExport_{:016x}", h))
++                }
++                _ => ("/Engine/UnknownPackage".to_string(), "UnknownExport".to_string()),
++            };
+             let null_package_import = create_and_add_unknown_package_import(builder);
+             let import_map_index = FPackageIndex::create_import(builder.legacy_package.imports.len() as u32);
+-            let null_object_import = create_unknown_object_import_map_entry(builder, null_package_import);
++            let mut null_object_import = create_unknown_object_import_map_entry(builder, null_package_import);
++            null_object_import.object_name = builder.legacy_package.name_map.store(&unk_obj_name);
++            let pkg_idx = null_package_import.to_import_index() as usize;
++            builder.legacy_package.imports[pkg_idx].object_name = builder.legacy_package.name_map.store(&unk_pkg_name);
+ 
+             builder.legacy_package.imports.push(null_object_import);
+             builder.zen_import_lookup.insert(import_object_index, import_map_index);

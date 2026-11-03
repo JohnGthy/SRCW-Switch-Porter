@@ -1,0 +1,16 @@
+# build output
+bin/
+obj/
+dist/
+external/
+*.user
+.vs/
+
+# never commit game files, dumps or mod files
+*.utoc
+*.ucas
+*.pak
+*.locres
+game names.json
+oo2core*.dll
+conversion report.txt
