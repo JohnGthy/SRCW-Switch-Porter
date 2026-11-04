@@ -667,24 +667,69 @@ public class Converter
     /// <summary>The material's main color setting (own value, else the custom master's default).</summary>
     (float, float, float)? PlainColor(ModAsset a, ModAsset master)
     {
-        string[] names = { "Color", "BaseColor", "Base Color", "Albedo", "Tint", "DiffuseColor", "MainColor" };
+        string[] names = { "Color", "BaseColor", "Base Color", "Albedo", "Tint", "DiffuseColor", "MainColor", "Color1", "Color2", "Color3" };
+        static bool Lit((float r, float g, float b) v) => v.r + v.g + v.b > 0.05f;
         if (Prop(a.MainExport, "VectorParameterValues") is ArrayPropertyData arr)
             foreach (var st in arr.Value.OfType<UAssetAPI.PropertyTypes.Structs.StructPropertyData>())
             {
                 var info = st.Value.FirstOrDefault(p => Str(p.Name) == "ParameterInfo") as UAssetAPI.PropertyTypes.Structs.StructPropertyData;
                 var n = (info?.Value.FirstOrDefault(p => Str(p.Name) == "Name") as NamePropertyData)?.Value?.ToString();
                 if (n == null || !names.Contains(n, StringComparer.OrdinalIgnoreCase)) continue;
-                if (st.Value.FirstOrDefault(p => Str(p.Name) == "ParameterValue") is UAssetAPI.PropertyTypes.Structs.LinearColorPropertyData lc)
+                if (st.Value.FirstOrDefault(p => Str(p.Name) == "ParameterValue") is UAssetAPI.PropertyTypes.Structs.LinearColorPropertyData lc
+                    && Lit((lc.Value.R, lc.Value.G, lc.Value.B)))
                     return (lc.Value.R, lc.Value.G, lc.Value.B);
             }
         try
         {
             matInfo ??= new MaterialInfo(legacyRootForChecks);
             var d = matInfo.Get(master.RelPath);
-            if (d != null) foreach (var n in names) if (d.Vectors.TryGetValue(n, out var v)) return v;
+            if (d != null) foreach (var n in names) if (d.Vectors.TryGetValue(n, out var v) && Lit(v)) return v;
         }
         catch { }
         return null;
+    }
+
+    static readonly System.Text.RegularExpressions.Regex RxMask = new("(^|_)(a|alpha|mask|msk|opacity|opa|op|cutout|clip)([0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Masked custom materials that take their shape from a black/white mask texture (clouds, leaves, flames on flat
+    /// cards) and their color from a setting: the game's material would draw the mask itself on solid cards, so build a
+    /// cut-out copy of the mask in the material's color. Returns the new texture, or null if this isn't such a material.
+    /// </summary>
+    string MaskCutout(ModAsset mat, ModAsset master, string bc)
+    {
+        if (bc == null || !RxMask.IsMatch(Short(bc)) || !byPackage.TryGetValue(bc, out var mask)) return null;
+        var names = master.Asset.GetNameMapIndexList();
+        if (!names.Any(n => n.Value is "BLEND_Masked" or "BLEND_Translucent")) return null;
+        var fmt = TextureTools.PixelFormat(mask.Asset); if (fmt != "PF_DXT1" && fmt != "PF_DXT5") return null;
+        if (!TextureTools.IsMaskTexture(mask.Path)) return null;
+        var col = PlainColor(mat, master) ?? (1f, 1f, 1f);
+        int cols = 1, rows = 1;
+        try
+        {
+            matInfo ??= new MaterialInfo(legacyRootForChecks); var d = matInfo.Get(master.RelPath);
+            if (d != null)
+            {
+                if (d.Scalars.TryGetValue("Columns", out var c) && c >= 1 && c <= 16) cols = (int)c;
+                if (d.Scalars.TryGetValue("Rows", out var r) && r >= 1 && r <= 16) rows = (int)r;
+            }
+        }
+        catch { }
+        try
+        {
+            static byte S(float v) => (byte)Math.Clamp((int)Math.Round(255 * Math.Pow(Math.Clamp(v, 0, 1), 1 / 2.2)), 0, 255);
+            var newShort = mask.ShortName + "_SwitchCutout"; var newPkg = mask.PackageName + "_SwitchCutout";
+            var path = Path.Combine(Path.GetDirectoryName(mask.Path), newShort + ".uasset");
+            foreach (var ext in new[] { ".uasset", ".uexp", ".ubulk" })
+            { var src = Path.ChangeExtension(mask.Path, ext); if (File.Exists(src)) File.Copy(src, Path.ChangeExtension(path, ext), true); }
+            RenamePackage(path, mask.PackageName, mask.ShortName, newPkg, newShort);
+            var u = new UAsset(path, EngineVersion.VER_UE5_4); u.FolderName = new FString(newPkg); u.Write(path);
+            if (!TextureTools.MakeCutout(path, S(col.Item1), S(col.Item2), S(col.Item3), cols, rows)) return null;
+            byPackage[newPkg] = new ModAsset { Path = path, RelPath = mask.RelPath[..(mask.RelPath.LastIndexOf('/') + 1)] + newShort + ".uasset", PackageName = newPkg, Asset = new UAsset(path, EngineVersion.VER_UE5_4), Container = mat.Container };
+            log.Info($"{mat.ShortName}: its shape comes from the mask {mask.ShortName}{(cols * rows > 1 ? $" ({cols}x{rows} animation frames, first frame used)" : "")}; made a cut-out texture in its color.");
+            return newPkg;
+        }
+        catch (Exception ex) { log.Warn($"{mat.ShortName}: couldn't make a cut-out texture from {mask.ShortName} ({ex.Message})."); return null; }
     }
 
     string SolidTexture(ModAsset near, (float r, float g, float b) col)
@@ -944,6 +989,11 @@ public class Converter
                     bc = SolidTexture(a, col);
                     if (bc != null) log.Info($"{a.ShortName}: has no texture, only a color; using a solid-color texture.");
                 }
+                if (MaskCutout(a, cmaster, bc) is string cut)
+                {
+                    rebuildWithTextures.Add((a, CharaAfroHair, cut, null, null, why + " (shape from a mask: cut-out)"));
+                    continue;
+                }
                 if (bc != null)
                 {
                     bool alpha2 = o.Transparency == TransparencyMode.Always
@@ -1105,8 +1155,10 @@ public class Converter
                 else
                 {
                     var (bc, nrm, mro) = ClassifyTextures(texs);
-                    MakeInstance(m, CharaBasic, new() { ["Bc"] = bc, ["N"] = nrm, ["MRO"] = mro });
-                    log.Change($"{m.ShortName}: custom material used directly by a mesh -> rebuilt as an instance of M_Chara_Basic" +
+                    var cut = MaskCutout(m, m, bc); var target = cut != null ? CharaAfroHair : CharaBasic;
+                    if (cut != null) { bc = cut; nrm = null; mro = null; }
+                    MakeInstance(m, target, new() { ["Bc"] = bc, ["N"] = nrm, ["MRO"] = mro });
+                    log.Change($"{m.ShortName}: custom material used directly by a mesh -> rebuilt as an instance of {Short(target)}{(cut != null ? " (cut-out)" : "")}" +
                                $" (Bc: {Short(bc) ?? "default"}, N: {Short(nrm) ?? "default"}, MRO: {Short(mro) ?? "default"})");
                     if (bc == null) log.Warn($"{m.ShortName}: no color texture recognised among {string.Join(", ", texs.Select(Short))}; it will look plain.");
                 }

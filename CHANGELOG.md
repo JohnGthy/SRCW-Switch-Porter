@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.2
+- Cut-out materials: custom materials that take their shape from a black/white mask texture (clouds, foliage, flames on
+  flat cards) and their color from a setting are rebuilt with a cut-out copy of the mask in that color, using the
+  transparency material. Flipbook masks (Rows/Columns) use their first frame. Fixes the Flying Nimbus showing black
+  squares with white clouds.
+- Color-only parts pick the first color setting that isn't black (Color1/2/3 too).
+
 ## 1.9.1
 - Window layout: the settings scroll in their own area, while the buttons, progress bar, current step and log stay
   visible at the bottom (drag the divider to resize the log).

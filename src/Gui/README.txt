@@ -1,4 +1,4 @@
-SRCW Switch Porter 1.9.1
+SRCW Switch Porter 1.9.2
 ========================
 Converts Sonic Racing CrossWorlds PC skin mods so they work on the Nintendo Switch version.
 
@@ -50,6 +50,8 @@ WHAT IT DOES AUTOMATICALLY
   textures back; parts with only a color (e.g. a halo) get a solid-color texture.
 - Name texts from the mod's .json text files (e.g. "chara12001" = "GOKU", machine names) go into the
   names pak (needs the game's text, see below).
+- Materials that cut their shape out of a black/white mask (e.g. a cloud made of flat cards) get a
+  cut-out texture in the material's color instead of showing the mask as black squares.
 - Checks that the mod's own files link to each other correctly and reports any broken link.
 
 CHARACTER NAMES (OPTIONAL)
