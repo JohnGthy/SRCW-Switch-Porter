@@ -1,5 +1,5 @@
-SRCW Switch Porter 1.9
-======================
+SRCW Switch Porter 1.9.1
+========================
 Converts Sonic Racing CrossWorlds PC skin mods so they work on the Nintendo Switch version.
 
 HOW TO USE

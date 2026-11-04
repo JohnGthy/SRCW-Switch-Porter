@@ -22,6 +22,18 @@ public class MainForm : Form
     readonly Label lOpts = new() { AutoSize = true, ForeColor = Color.DimGray, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 3, 3), MaximumSize = new Size(560, 0) };
     readonly Button bOpts = new() { Text = "Choose...", AutoSize = true, Enabled = false };
     ModOptions mopts;
+    readonly Label lStatus = new() { AutoSize = false, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
+    readonly System.Collections.Generic.List<Section> sections = new();
+    Section secName, secDb;
+    readonly System.Collections.Generic.List<Label> wrapLabels = new();
+
+    Section AddSection(TableLayoutPanel parent, string title, Control body, bool open, Action<bool> remember, Func<string> summary)
+    {
+        var sec = new Section(title, body, open) { Summary = summary, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
+        sec.Toggled += v => remember(v);
+        sec.RefreshSummary(); parent.Controls.Add(sec); sections.Add(sec);
+        return sec;
+    }
     readonly CheckBox chkShared = new() { Text = "Include shared game blueprints (risky: can break other characters)", AutoSize = true };
     readonly Label lDb = new() { AutoSize = true, ForeColor = Color.DimGray };
     readonly RichTextBox log = new() { ReadOnly = true, BackColor = Color.White, Font = new Font("Consolas", 9f), WordWrap = true, BorderStyle = BorderStyle.FixedSingle };
@@ -33,66 +45,103 @@ public class MainForm : Form
 
     public MainForm()
     {
-        Text = "SRCW Switch Porter"; Width = 900; Height = 900; MinimumSize = new Size(760, 600); StartPosition = FormStartPosition.CenterScreen;
+        Text = "SRCW Switch Porter"; Width = 900; Height = 820; MinimumSize = new Size(760, 600); StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9.5f); AllowDrop = true;
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(14), AutoSize = false };
-        Controls.Add(root);
+        // window = scrollable settings on top, buttons + progress + log pinned at the bottom (divider can be dragged)
+        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, FixedPanel = FixedPanel.Panel2, SplitterWidth = 6, BackColor = Color.FromArgb(225, 225, 225) };
+        Controls.Add(split);
+        split.Panel1.BackColor = split.Panel2.BackColor = SystemColors.Control;
+        var scroll = split.Panel1; scroll.AutoScroll = true;
+        var content = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(14, 12, 14, 8), Location = new Point(0, 0) };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        scroll.Controls.Add(content);
+        void Fit()
+        {
+            int w = scroll.ClientSize.Width; content.Width = w; content.MaximumSize = new Size(w, 0); content.MinimumSize = new Size(w, 0);
+            foreach (var sec in sections) sec.FitWidth(w - 28);
+            foreach (var lb in wrapLabels) lb.MaximumSize = new Size(Math.Max(200, w - (lb == lOpts ? 330 : 90)), 0);
+        }
+        scroll.Resize += (_, _) => Fit();
 
         var title = new Label { Text = "Port Sonic Racing CrossWorlds PC skin mods to Nintendo Switch", AutoSize = true, Font = new Font("Segoe UI Semibold", 12f), Margin = new Padding(0, 0, 0, 2) };
-        var sub = new Label { Text = "Drop a mod folder on this window, or pick it below. Your PC mod files are never changed.", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 10) };
-        root.Controls.Add(title); root.Controls.Add(sub);
+        var sub = new Label { Text = "Drop a mod folder on this window, or pick it below. Your PC mod files are never changed.", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 8) };
+        content.Controls.Add(title); content.Controls.Add(sub);
 
-        var grid = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 3, AutoSize = true };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        TableLayoutPanel Grid() { var g = new TableLayoutPanel { ColumnCount = 3, AutoSize = true, Dock = DockStyle.Fill };
+            g.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); g.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); g.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); return g; }
+
+        // --- always visible: what to convert
+        var grid = Grid(); grid.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
         AddRow(grid, "PC mod folder", tMod, () => PickFolder(tMod, "Folder containing the PC mod (.utoc / .ucas / .pak)"));
         AddRow(grid, "global.utoc / .ucas folder", tGlobal, () => PickFolder(tGlobal, "Folder that contains global.utoc and global.ucas"));
         AddRow(grid, "Output folder", tOut, () => PickFolder(tOut, "Where to write the Switch files"));
         grid.Controls.Add(new Label { Text = "Mod parts / outfits", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
+        lOpts.MaximumSize = new Size(0, 0); lOpts.Anchor = AnchorStyles.Left | AnchorStyles.Right;
         grid.Controls.Add(lOpts); grid.Controls.Add(bOpts);
-        grid.Controls.Add(new Label { Text = "Max texture size", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
-        cTex.Items.AddRange(new object[] { "Keep original", "2048", "1024 (recommended)", "512 (smallest, least stutter)" }); cTex.Width = 230;
-        grid.Controls.Add(cTex); grid.Controls.Add(new Label());
-        grid.Controls.Add(new Label { Text = "Transparency material", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
-        cAlpha.Items.AddRange(new object[] { "Auto (recommended)", "Never - always the normal material", "Always - transparency material for textures with alpha" }); cAlpha.Width = 380;
-        grid.Controls.Add(cAlpha); grid.Controls.Add(new Label());
-        grid.Controls.Add(new Label()); grid.Controls.Add(chkShared); grid.Controls.Add(new Label());
-        root.Controls.Add(grid);
+        content.Controls.Add(grid);
 
-        var ng = new GroupBox { Text = "Character name (optional)", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(10), Margin = new Padding(3, 10, 3, 0) };
-        var ngt = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, AutoSize = true };
-        ngt.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); ngt.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); ngt.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        // --- conversion settings
+        var cg = Grid();
+        cg.Controls.Add(new Label { Text = "Max texture size", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
+        cTex.Items.AddRange(new object[] { "Keep original", "2048", "1024 (recommended)", "512 (smallest, least stutter)" }); cTex.Width = 230;
+        cg.Controls.Add(cTex); cg.Controls.Add(new Label { AutoSize = true });
+        cg.Controls.Add(new Label { Text = "Transparency material", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
+        cAlpha.Items.AddRange(new object[] { "Auto (recommended)", "Never - always the normal material", "Always - transparency material for textures with alpha" }); cAlpha.Width = 380;
+        cg.Controls.Add(cAlpha); cg.Controls.Add(new Label { AutoSize = true });
+        cg.Controls.Add(new Label { AutoSize = true }); cg.Controls.Add(chkShared); cg.Controls.Add(new Label { AutoSize = true });
+        var secConv = AddSection(content, "Conversion settings", cg, s.OpenConversion, v => s.OpenConversion = v,
+            () => $"Max texture: {cTex.Text}   ·   Transparency: {cAlpha.Text.Split(' ')[0]}{(chkShared.Checked ? "   ·   shared blueprints included" : "")}");
+
+        // --- character name
+        var ngt = Grid();
         ngt.Controls.Add(new Label { Text = "New name", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
-        tName.Dock = DockStyle.Fill; tName.Margin = new Padding(3, 5, 3, 3); ngt.Controls.Add(tName); ngt.Controls.Add(new Label());
+        tName.Dock = DockStyle.Fill; tName.Margin = new Padding(3, 5, 3, 3); ngt.Controls.Add(tName); ngt.Controls.Add(new Label { AutoSize = true });
         ngt.Controls.Add(new Label { Text = "Name slot", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
-        cSlot.Dock = DockStyle.Fill; cSlot.Items.Add("Auto-detect from the mod"); cSlot.SelectedIndex = 0; ngt.Controls.Add(cSlot); ngt.Controls.Add(new Label());
+        cSlot.Dock = DockStyle.Fill; cSlot.Items.Add("Auto-detect from the mod"); cSlot.SelectedIndex = 0; ngt.Controls.Add(cSlot); ngt.Controls.Add(new Label { AutoSize = true });
         AddRow(ngt, "Base game text", tBaseText, () => PickFile(tBaseText, "Text pak (*.pak)|*.pak|All files|*.*"));
-        var nh = new Label { AutoSize = true, MaximumSize = new Size(820, 0), ForeColor = Color.DimGray, Margin = new Padding(3, 2, 3, 2),
+        var nh = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = Color.DimGray, Margin = new Padding(3, 2, 3, 2),
             Text = "Best: build the name database from your Switch dump; it saves your game's own text. Text from a PC text pak is older than your Switch game, so newer characters will show code names like chara18001. To rename characters of a text mod, pick the text mod's .pak here, choose a name slot and press \"Make names pak only\" (no skin mod needed). Every name you set is kept and written into one SwitchPorter_Names_999_P.pak." };
-        ngt.Controls.Add(nh); ngt.SetColumnSpan(nh, 3);
+        ngt.Controls.Add(nh); ngt.SetColumnSpan(nh, 3); wrapLabels.Add(nh); wrapLabels.Add(lNames);
         var nrow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0) }; nrow.Controls.Add(lNames); nrow.Controls.Add(lClear);
         ngt.Controls.Add(nrow); ngt.SetColumnSpan(nrow, 3);
-        ng.Controls.Add(ngt); root.Controls.Add(ng);
+        secName = AddSection(content, "Character name (optional)", ngt, s.OpenNames, v => s.OpenNames = v,
+            () => (string.IsNullOrWhiteSpace(tName.Text) ? "Not renaming" : $"New name: {tName.Text.Trim()}") + (s.Names.Count > 0 ? $"   ·   {s.Names.Count} saved name(s)" : ""));
 
-        var db = new GroupBox { Text = "Game name database (optional)", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(10), Margin = new Padding(3, 10, 3, 6) };
-        var dbg = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, AutoSize = true };
-        dbg.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); dbg.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); dbg.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var info = new Label { AutoSize = true, MaximumSize = new Size(820, 0), ForeColor = Color.DimGray, Margin = new Padding(3, 0, 3, 6),
-            Text = "Without it, references to the game's own assets are found by guessing names (works for most mods). Build it once from your Switch dump's UNION\\Content\\Paks folder and every conversion resolves exactly. Only file indexes are read; nothing is extracted." };
-        dbg.Controls.Add(info, 0, 0); dbg.SetColumnSpan(info, 3);
+        // --- name database
+        var dbg = Grid();
+        var info = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = Color.DimGray, Margin = new Padding(3, 0, 3, 6),
+            Text = "Without it, references to the game's own assets are found by guessing names (works for most mods). Build it once from your Switch dump's UNION\\Content\\Paks folder and every conversion resolves exactly. It also saves your game's text for character names. Only file indexes are read; nothing is extracted." };
+        dbg.Controls.Add(info, 0, 0); dbg.SetColumnSpan(info, 3); wrapLabels.Add(info); wrapLabels.Add(lDb); wrapLabels.Add(lOpts);
         AddRow(dbg, "Switch dump Paks folder", tDump, () => PickFolder(tDump, "Your Switch dump's UNION\\Content\\Paks folder"));
         dbg.Controls.Add(new Label { Text = "AES key (only if needed)", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
         tAes.Dock = DockStyle.Fill; dbg.Controls.Add(tAes); dbg.Controls.Add(bBuild);
         dbg.Controls.Add(lDb, 0, 3); dbg.SetColumnSpan(lDb, 3);
-        db.Controls.Add(dbg); root.Controls.Add(db);
+        secDb = AddSection(content, "Game name database (optional)", dbg, s.OpenDatabase, v => s.OpenDatabase = v, () => lDb.Text);
 
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
+        cTex.SelectedIndexChanged += (_, _) => secConv.RefreshSummary(); cAlpha.SelectedIndexChanged += (_, _) => secConv.RefreshSummary();
+        chkShared.CheckedChanged += (_, _) => secConv.RefreshSummary(); tName.TextChanged += (_, _) => secName.RefreshSummary();
+
+        // --- bottom: buttons, progress, log
+        var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(14, 6, 14, 12) };
+        bottom.RowStyles.Add(new RowStyle(SizeType.AutoSize)); bottom.RowStyles.Add(new RowStyle(SizeType.AutoSize)); bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        split.Panel2.Controls.Add(bottom);
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 0, 0, 4) };
         bConvert.Width = 190; bOpen.Width = 170; bCancel.Width = 100; bNames.Width = 180;
         bConvert.Font = new Font("Segoe UI Semibold", 10f);
-        buttons.Controls.AddRange(new Control[] { bConvert, bNames, bCancel, bOpen }); root.Controls.Add(buttons);
-        bar.Dock = DockStyle.Top; root.Controls.Add(bar);
-        log.Dock = DockStyle.Fill; root.RowStyles.Clear();
-        for (int i = 0; i < 7; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.Controls.Add(log);
+        buttons.Controls.AddRange(new Control[] { bConvert, bNames, bCancel, bOpen }); bottom.Controls.Add(buttons, 0, 0);
+        var prog = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true, Margin = new Padding(0, 0, 0, 4) };
+        prog.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220)); prog.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bar.Dock = DockStyle.Fill; bar.Margin = new Padding(3, 6, 8, 3); lStatus.Dock = DockStyle.Fill;
+        prog.Controls.Add(bar, 0, 0); prog.Controls.Add(lStatus, 1, 0); bottom.Controls.Add(prog, 0, 1);
+        log.Dock = DockStyle.Fill; bottom.Controls.Add(log, 0, 2);
+
+        Shown += (_, _) =>
+        {
+            split.Panel1MinSize = 120; split.Panel2MinSize = 170;
+            split.SplitterDistance = Math.Max(120, split.Height - Math.Clamp(s.LogHeight, 170, split.Height - 120) - split.SplitterWidth);
+            Fit();
+        };
+        split.SplitterMoved += (_, _) => s.LogHeight = split.Panel2.Height;
 
         // state
         tGlobal.Text = s.GlobalDir ?? ""; tDump.Text = s.DumpDir ?? ""; tAes.Text = s.AesKey ?? ""; tBaseText.Text = s.BaseTextPath ?? "";
@@ -153,6 +202,7 @@ public class MainForm : Form
     {
         lNames.Text = s.Names.Count == 0 ? "Saved names: none" : "Saved names: " + string.Join(", ", s.Names.Select(kv => $"{kv.Key} = {kv.Value}"));
         lClear.Visible = s.Names.Count > 0;
+        secName?.RefreshSummary();
     }
 
     string slotsLoadedFor;
@@ -200,6 +250,7 @@ public class MainForm : Form
             lDb.ForeColor = db == null ? Color.DimGray : Color.DarkGreen;
         }
         catch { lDb.Text = "Status: database file is unreadable; rebuild it."; }
+        secDb?.RefreshSummary();
     }
 
     void Line(Level l, string m)
@@ -209,6 +260,7 @@ public class MainForm : Form
         log.SelectionColor = l switch { Level.Change => Color.FromArgb(0, 110, 40), Level.Warn => Color.FromArgb(180, 100, 0), Level.Error => Color.Firebrick, _ => Color.FromArgb(40, 40, 40) };
         log.AppendText((l switch { Level.Change => "+ ", Level.Warn => "! ", Level.Error => "X ", _ => "  " }) + m + Environment.NewLine);
         log.ScrollToCaret();
+        if (!string.IsNullOrWhiteSpace(m)) lStatus.Text = m;
     }
 
     void Busy(bool b) { bConvert.Enabled = bBuild.Enabled = bNames.Enabled = !b; bCancel.Enabled = b; bar.Style = b ? ProgressBarStyle.Marquee : ProgressBarStyle.Continuous; if (!b) bar.Value = 0; UseWaitCursor = b; }

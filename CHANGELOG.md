@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.1
+- Window layout: the settings scroll in their own area, while the buttons, progress bar, current step and log stay
+  visible at the bottom (drag the divider to resize the log).
+- "Conversion settings", "Character name" and "Game name database" fold open/closed with arrows and show a one-line
+  summary when closed; the window remembers which ones are open and the log size.
+
 ## 1.9
 - **Mod parts / outfits:** mods with a `mod.ini` (PC mod manager options) or `.disabled` files get a "Choose..." dialog
   to pick outfits, accessories, transformations and add-ons; only those parts are converted, and a chosen option's

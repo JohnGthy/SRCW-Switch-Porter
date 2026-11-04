@@ -12,6 +12,10 @@ public class Settings
     public string BaseTextPath { get; set; }
     public int Transparency { get; set; } = 0;
     public bool IncludeSharedBlueprints { get; set; }
+    public bool OpenConversion { get; set; } = true;
+    public bool OpenNames { get; set; }
+    public bool OpenDatabase { get; set; }
+    public int LogHeight { get; set; } = 260;
     public System.Collections.Generic.Dictionary<string, string> Names { get; set; } = new();
     public static string Dir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SRCW Switch Porter");
     public static string FilePath => Path.Combine(Dir, "settings.json");
