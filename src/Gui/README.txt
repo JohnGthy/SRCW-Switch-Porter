@@ -1,4 +1,4 @@
-SRCW Switch Porter 1.6
+SRCW Switch Porter 1.7
 ======================
 Converts Sonic Racing CrossWorlds PC skin mods so they work on the Nintendo Switch version.
 
@@ -35,6 +35,9 @@ WHAT IT DOES AUTOMATICALLY
 - Material instances with no parent are rebuilt (or left alone if nothing uses them).
 - Files that appear in several containers of the same mod are kept once when identical, or in their own
   pak when different (the report says which).
+- Places every file by its real package name (some mods store files under unrelated paths).
+- Leaves out replacements of blueprints shared by the whole game (e.g. driver animation templates) unless
+  "Include shared game blueprints" is ticked: made for another game version, they can break every racer.
 - Copies text/audio .pak files unchanged.
 
 CHARACTER NAMES (OPTIONAL)
@@ -46,7 +49,8 @@ different mods don't overwrite each other. Copy the newest one to the SD card (r
 "Clear saved names" forgets them.
 The game's text is needed as a starting point. It comes from (in order): the mod's own text pak, the
 "Base game text" pak you pick, or the text saved when you build the name database from your Switch dump.
-The dump's text is best: PC text may differ slightly if the two versions are on different updates.
+Use the dump's text: PC text packs are usually older than your Switch game, and characters added in
+later updates then show code names (like chara18001) instead of their names.
 Only one text pak can be active at a time; a mod's own text pak is merged into the names pak.
 
 RENAMING WITHOUT A SKIN MOD (e.g. on top of a text mod)
@@ -71,4 +75,3 @@ LIMITATIONS
   (needs internet once).
 
 Built with retoc (MIT), UAssetAPI (MIT) and CUE4Parse (Apache-2.0); see the "licenses" folder.
-Source code: see the GitHub repository (MIT license).

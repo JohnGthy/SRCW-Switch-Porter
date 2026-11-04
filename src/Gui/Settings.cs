@@ -11,6 +11,7 @@ public class Settings
     public int MaxTexture { get; set; } = 1024;
     public string BaseTextPath { get; set; }
     public int Transparency { get; set; } = 0;
+    public bool IncludeSharedBlueprints { get; set; }
     public System.Collections.Generic.Dictionary<string, string> Names { get; set; } = new();
     public static string Dir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SRCW Switch Porter");
     public static string FilePath => Path.Combine(Dir, "settings.json");

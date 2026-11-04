@@ -23,7 +23,8 @@ public class Options
     public string TitleId = "01006E001823C000";
     public string WorkDir;           // temp; default under system temp
     public bool KeepWorkDir;
-    public TransparencyMode Transparency = TransparencyMode.Auto;  // when to use M_Chara_AfroHair for textures with alpha
+    public TransparencyMode Transparency = TransparencyMode.Auto;
+    public bool IncludeSharedBlueprints;   // keep replacements of blueprints used by the whole game  // when to use M_Chara_AfroHair for textures with alpha
     // ---- character name ----
     public string NewName;                                   // name to give the character this mod replaces (null = none)
     public string NameKey;                                   // name slot to change (null = auto-detect)
@@ -140,7 +141,8 @@ public class Converter
             if (Directory.Exists(legacyRoot))
                 foreach (var f in Directory.GetFiles(legacyRoot, "*.uasset", SearchOption.AllDirectories).Concat(Directory.GetFiles(legacyRoot, "*.umap", SearchOption.AllDirectories)).OrderBy(x => x, StringComparer.Ordinal))
                 {
-                    var rel = Path.GetRelativePath(legacyRoot, f).Replace('\\', '/'); var pn = PackageNameFromRel(rel);
+                    var rel = Path.GetRelativePath(legacyRoot, f).Replace('\\', '/');
+                    var pn = pkgByFile.TryGetValue(rel, out var mpn) ? mpn : PackageNameFromRel(rel);
                     try
                     {
                         var a = new ModAsset { Path = f, RelPath = rel, PackageName = pn, Asset = new UAsset(f, EngineVersion.VER_UE5_4) };
@@ -151,7 +153,8 @@ public class Converter
                 }
             log.Info($"{byPackage.Count} asset(s) converted.");
             int moved = byPackage.Values.Count(a => !CanonicalRel(a.PackageName, ".uasset").Equals(a.RelPath, StringComparison.OrdinalIgnoreCase) && a.PackageName.StartsWith("/Game/"));
-            if (moved > 0) log.Change($"{moved} asset(s) were stored under a non-standard folder in the PC mod (e.g. \"Content/...\" instead of \"UNION/Content/...\"); placed where the Switch version looks for them.");
+            ExcludeSharedBlueprints();
+            if (moved > 0) log.Change($"{moved} asset(s) were stored under a different path than their real name in the PC mod; placed where the Switch version looks for them (by their real package name).");
             ct.ThrowIfCancellationRequested();
 
             CheckDuplicates(Path.Combine(work, "in"), work);
@@ -283,7 +286,10 @@ public class Converter
         }
         res.Paks.Add(Path.GetFileName(pak)); res.Names = names;
         log.Info($"Wrote {Naming.PakName}.pak from {from}, with {names.Count} custom name(s): " + string.Join(", ", names.Select(kv => $"{kv.Key} = {kv.Value}")));
-        if (from != "your Switch dump") log.Warn("The base text comes from the PC version. If your Switch game is on a different update, a few menu texts could be off; building the name database from your dump fixes this.");
+        if (from != "your Switch dump")
+            log.Warn("IMPORTANT: this names pak replaces ALL of the game's text with text that does not come from your Switch game. " +
+                     "Characters added in later game updates will show code names (like chara18001) instead of their names, and other menu text can be outdated. " +
+                     "Build the name database from your Switch dump (it saves your game's own text) and convert again to avoid this. If names look like chara12345 in game, delete SwitchPorter_Names_999_P.pak.");
         log.Info("This one pak holds all names you've set so far; copy it over the old one. Only one text pak can be active at a time.");
     }
 
@@ -327,6 +333,33 @@ public class Converter
                 log.Warn($"{main.ShortName} exists in both {main.Container} and {PakName(c.cont)} with DIFFERENT content. Both are kept in their own pak; like on PC, the game uses whichever pak loads last. Remove one pak if the wrong version shows.");
             }
         }
+    }
+
+    /// <summary>
+    /// Blueprints shared by the whole game (e.g. the driver animation templates under /Blueprint/) affect every character.
+    /// A mod built for another game version that replaces them can break all racers, so they are left out unless asked for.
+    /// </summary>
+    void ExcludeSharedBlueprints()
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pn in byPackage.Keys)
+        {
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(pn, "Extnd[0-9]+_Character[0-9]+", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) ids.Add(m.Value);
+            var cm = System.Text.RegularExpressions.Regex.Match(pn, "/Asset/Character/(?:Skin/)?([^/]+)/", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (cm.Success && !cm.Groups[1].Value.Equals("Master_Material", StringComparison.OrdinalIgnoreCase) && !cm.Groups[1].Value.Equals("Common", StringComparison.OrdinalIgnoreCase)) ids.Add(cm.Groups[1].Value);
+        }
+        var shared = byPackage.Values.Where(a => System.Text.RegularExpressions.Regex.IsMatch(a.PackageName, "^/Game/[^/]+/Blueprint/", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                                             && !ids.Any(id => a.PackageName.Contains(id, StringComparison.OrdinalIgnoreCase))).ToList();
+        if (shared.Count == 0) return;
+        if (o.IncludeSharedBlueprints)
+        {
+            log.Warn($"This mod replaces {shared.Count} blueprint(s) shared by the whole game ({string.Join(", ", shared.Select(x => x.ShortName))}). Included as requested: if they were made for a different game version, other characters can break.");
+            return;
+        }
+        foreach (var a in shared) a.Removed = true;
+        log.Warn($"Left out {shared.Count} blueprint(s) that replace parts of the game used by EVERY character ({string.Join(", ", shared.Select(x => x.ShortName))}). " +
+                 "Made for a different game version, they can break animations or placement for all racers. This character's own animations may not fully work without them; " +
+                 "tick \"Include shared game blueprints\" to try them anyway (remove the pak again if other characters break).");
     }
 
     // ===================================================================== helpers
@@ -379,6 +412,8 @@ public class Converter
         return all;
     }
 
+    readonly Dictionary<string, string> pkgByFile = new(StringComparer.OrdinalIgnoreCase); // converted file (relative) -> real package name
+
     List<string> Manifest(string utoc, string work)
     {
         var dir = Path.Combine(work, "manifest"); Directory.CreateDirectory(dir);
@@ -386,7 +421,16 @@ public class Converter
         var list = new List<string>();
         using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "pakstore.json")));
         foreach (var e in doc.RootElement.GetProperty("oplog").GetProperty("entries").EnumerateArray())
-            list.Add(e.GetProperty("packagestoreentry").GetProperty("packagename").GetString());
+        {
+            var pn = e.GetProperty("packagestoreentry").GetProperty("packagename").GetString(); list.Add(pn);
+            if (e.TryGetProperty("packagedata", out var pd))
+                foreach (var f in pd.EnumerateArray())
+                {
+                    var fn = f.GetProperty("filename").GetString().Replace('\\', '/');
+                    while (fn.StartsWith("../")) fn = fn[3..];
+                    pkgByFile[fn] = pn;
+                }
+        }
         return list;
     }
 
@@ -416,7 +460,7 @@ public class Converter
     void ResolveReferences()
     {
         var items = new List<Unresolved>();
-        foreach (var a in byPackage.Values.Where(a => a.MainClass != "Material")) // custom masters get dropped anyway
+        foreach (var a in byPackage.Values.Where(a => !a.Removed && a.MainClass != "Material")) // custom masters get dropped anyway
         {
             var usage = ReferenceUsage(a.Asset);
             for (int i = 0; i < a.Asset.Imports.Count; i++)
@@ -464,7 +508,15 @@ public class Converter
             var shortName = pn[(pn.LastIndexOf('/') + 1)..];
             string objName = null, clsPkg = null, cls = null;
             if (db != null && db.Exports.TryGetValue(NameDb.Key(it.PkgId, it.Hash), out var ex)) { objName = ex.Name; clsPkg = ex.ClassPackage; cls = ex.ClassName; }
-            if (objName == null && CityHash.ExportHash(shortName) == it.Hash) { objName = shortName; (clsPkg, cls) = Guesser.GuessClass(shortName, it.Usage); }
+            if (objName == null)
+                foreach (var cand in new[] { shortName, shortName + "_C", "Default__" + shortName + "_C" })
+                    if (CityHash.ExportHash(cand) == it.Hash)
+                    {
+                        objName = cand;
+                        if (cand.StartsWith("Default__")) { clsPkg = pn; cls = shortName + "_C"; }
+                        else (clsPkg, cls) = Guesser.GuessClass(cand, it.Usage);
+                        break;
+                    }
             if (objName == null || cls == null || objName.Contains('.'))
             {
                 log.Warn($"{it.A.ShortName}: found {pn} but could not identify the object inside it; left empty.");
@@ -688,9 +740,25 @@ public class Converter
         }
     }
 
-    static readonly System.Text.RegularExpressions.Regex RxAlbedo = new("(_abd|albedo|basecolor|base_color|_bc|_d|diffuse|_col|_color|_c)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-    static readonly System.Text.RegularExpressions.Regex RxNormal = new("(_nrm|normal|_n|_nm|_norm)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-    static readonly System.Text.RegularExpressions.Regex RxMro = new("(_mro|_orm)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static readonly System.Text.RegularExpressions.Regex RxNormal = new("(^|_)(n|nrm|nm|norm|normal|normalmap)([0-9_]*)$|normal", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static readonly System.Text.RegularExpressions.Regex RxMro = new("(^|_)(mro|orm)([0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static readonly System.Text.RegularExpressions.Regex RxColor = new("(^|_)(alb|albedo|abd|diffuse|dif|diff|col|color|colour|basecolor|base|bc|d|c|tex|texture)([0-9_]*)$|albedo|diffuse|basecolor|base_color", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static readonly System.Text.RegularExpressions.Regex RxNotColor = new("(^|_)(mask|msk|alpha|opac|opacity|ao|rough|roughness|metal|metallic|spec|spc|specular|prm|pbr|emis|emissive|ems|e|e1|fal|nra|height|disp|sss|rim|matcap|lut|ramp|noise|flow|id)([0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>Sorts a material's textures into color / normal / MRO using names and, for the mod's own textures, their compression format.</summary>
+    (string bc, string n, string mro) ClassifyTextures(List<string> texs)
+    {
+        string Fmt(string pk) => byPackage.TryGetValue(pk, out var t) ? TextureTools.PixelFormat(t.Asset) : null;
+        bool IsNormal(string pk) { var nm = Short(pk); return Fmt(pk) == "PF_BC5" || RxNormal.IsMatch(nm); }
+        var normals = texs.Where(IsNormal).ToList();
+        var mro = texs.Except(normals).FirstOrDefault(t => RxMro.IsMatch(Short(t)));
+        var rest = texs.Except(normals).Where(t => t != mro).ToList();
+        var bc = rest.FirstOrDefault(t => RxColor.IsMatch(Short(t)))
+              ?? rest.Where(t => !RxNotColor.IsMatch(Short(t)))
+                     .OrderByDescending(t => byPackage.TryGetValue(t, out var a) ? new FileInfo(Path.ChangeExtension(a.Path, ".ubulk")).Exists ? new FileInfo(Path.ChangeExtension(a.Path, ".ubulk")).Length : new FileInfo(Path.ChangeExtension(a.Path, ".uexp")).Length : 0)
+                     .FirstOrDefault();
+        return (bc, normals.FirstOrDefault(), mro);
+    }
 
     /// <summary>Custom master materials used directly by a mesh: rebuilt in place as instances of the game's materials.</summary>
     void ConvertDirectMasters()
@@ -701,7 +769,6 @@ public class Converter
             {
                 var u = m.Asset;
                 var texs = u.Imports.Where(i => Str(i.ClassName) == "Texture2D").Select(i => ImportPackage(u, i)).Where(p => p != null).ToList();
-                string Pick(System.Text.RegularExpressions.Regex rx) => texs.FirstOrDefault(t => rx.IsMatch(t[(t.LastIndexOf('/') + 1)..]));
                 if (IsSeeThrough(m))
                 {
                     MakeInstance(m, CharaAfroHair, new() { ["Bc"] = EnsureClearTexture(m) });
@@ -709,7 +776,7 @@ public class Converter
                 }
                 else
                 {
-                    var bc = Pick(RxAlbedo); var nrm = Pick(RxNormal); var mro = Pick(RxMro);
+                    var (bc, nrm, mro) = ClassifyTextures(texs);
                     MakeInstance(m, CharaBasic, new() { ["Bc"] = bc, ["N"] = nrm, ["MRO"] = mro });
                     log.Change($"{m.ShortName}: custom material used directly by a mesh -> rebuilt as an instance of M_Chara_Basic" +
                                $" (Bc: {Short(bc) ?? "default"}, N: {Short(nrm) ?? "default"}, MRO: {Short(mro) ?? "default"})");

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7
+- Files are placed by their real package name (fixes mods whose files are stored under unrelated paths, e.g. UI in the wrong folder).
+- Replacements of blueprints shared by the whole game (driver animation templates) are left out by default, with an
+  option to include them: built for another game version they can break every racer.
+- Better color/normal texture detection for rebuilt materials (names like _Alb, _skin, single-texture materials,
+  normal maps recognised by their BC5 format). Fixes all-white models.
+- Animation montages, blend spaces, sequences and blueprint classes are linked with the right type.
+- Much clearer warning when the names pak uses text that isn't from the user's own Switch game.
+
 ## 1.6
 - Material instances without a parent: left alone when unused, rebuilt from the built-in template when used (fixed a crash).
 - Files present in several containers of one mod: kept once when identical, in their own pak when different.

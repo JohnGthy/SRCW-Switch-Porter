@@ -19,6 +19,7 @@ public class MainForm : Form
     readonly Button bConvert = new() { Text = "Convert for Switch", Height = 36 }, bOpen = new() { Text = "Open output folder", Enabled = false, Height = 36 },
                     bBuild = new() { Text = "Build database", AutoSize = true }, bCancel = new() { Text = "Cancel", Enabled = false, Height = 36 },
                     bNames = new() { Text = "Make names pak only", Height = 36 };
+    readonly CheckBox chkShared = new() { Text = "Include shared game blueprints (risky: can break other characters)", AutoSize = true };
     readonly Label lDb = new() { AutoSize = true, ForeColor = Color.DimGray };
     readonly RichTextBox log = new() { ReadOnly = true, BackColor = Color.White, Font = new Font("Consolas", 9f), WordWrap = true, BorderStyle = BorderStyle.FixedSingle };
     readonly ProgressBar bar = new() { Style = ProgressBarStyle.Continuous, Height = 8 };
@@ -49,6 +50,7 @@ public class MainForm : Form
         grid.Controls.Add(new Label { Text = "Transparency material", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
         cAlpha.Items.AddRange(new object[] { "Auto (recommended)", "Never - always the normal material", "Always - transparency material for textures with alpha" }); cAlpha.Width = 380;
         grid.Controls.Add(cAlpha); grid.Controls.Add(new Label());
+        grid.Controls.Add(new Label()); grid.Controls.Add(chkShared); grid.Controls.Add(new Label());
         root.Controls.Add(grid);
 
         var ng = new GroupBox { Text = "Character name (optional)", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(10), Margin = new Padding(3, 10, 3, 0) };
@@ -60,7 +62,7 @@ public class MainForm : Form
         cSlot.Dock = DockStyle.Fill; cSlot.Items.Add("Auto-detect from the mod"); cSlot.SelectedIndex = 0; ngt.Controls.Add(cSlot); ngt.Controls.Add(new Label());
         AddRow(ngt, "Base game text", tBaseText, () => PickFile(tBaseText, "Text pak (*.pak)|*.pak|All files|*.*"));
         var nh = new Label { AutoSize = true, MaximumSize = new Size(820, 0), ForeColor = Color.DimGray, Margin = new Padding(3, 2, 3, 2),
-            Text = "Base game text is only needed if the mod has no text pak and you haven't built the name database (which saves the Switch game's text). To rename characters of a text mod, pick the text mod's .pak here, choose a name slot and press \"Make names pak only\" (no skin mod needed). Every name you set is kept and written into one SwitchPorter_Names_999_P.pak." };
+            Text = "Best: build the name database from your Switch dump; it saves your game's own text. Text from a PC text pak is older than your Switch game, so newer characters will show code names like chara18001. To rename characters of a text mod, pick the text mod's .pak here, choose a name slot and press \"Make names pak only\" (no skin mod needed). Every name you set is kept and written into one SwitchPorter_Names_999_P.pak." };
         ngt.Controls.Add(nh); ngt.SetColumnSpan(nh, 3);
         var nrow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0) }; nrow.Controls.Add(lNames); nrow.Controls.Add(lClear);
         ngt.Controls.Add(nrow); ngt.SetColumnSpan(nrow, 3);
@@ -96,7 +98,7 @@ public class MainForm : Form
             { s.Names.Clear(); s.Save(); RefreshNames(); }
         };
         cSlot.DropDown += (_, _) => FillSlots();
-        cAlpha.SelectedIndex = Math.Clamp(s.Transparency, 0, 2);
+        cAlpha.SelectedIndex = Math.Clamp(s.Transparency, 0, 2); chkShared.Checked = s.IncludeSharedBlueprints;
         cTex.SelectedIndex = s.MaxTexture switch { 0 => 0, 2048 => 1, 512 => 3, _ => 2 };
         if (!string.IsNullOrEmpty(s.LastModDir) && Directory.Exists(s.LastModDir)) SetMod(s.LastModDir);
         tMod.TextChanged += (_, _) => { if (Directory.Exists(tMod.Text) && string.IsNullOrWhiteSpace(tOut.Text)) tOut.Text = Path.Combine(tMod.Text, "Switch port"); };
@@ -167,7 +169,7 @@ public class MainForm : Form
 
     int MaxTex => cTex.SelectedIndex switch { 0 => 0, 1 => 2048, 3 => 512, _ => 1024 };
 
-    void SaveSettings() { s.GlobalDir = tGlobal.Text; s.DumpDir = tDump.Text; s.AesKey = tAes.Text; s.MaxTexture = MaxTex; s.LastModDir = tMod.Text; s.BaseTextPath = tBaseText.Text; s.Transparency = cAlpha.SelectedIndex; s.Save(); }
+    void SaveSettings() { s.GlobalDir = tGlobal.Text; s.DumpDir = tDump.Text; s.AesKey = tAes.Text; s.MaxTexture = MaxTex; s.LastModDir = tMod.Text; s.BaseTextPath = tBaseText.Text; s.Transparency = cAlpha.SelectedIndex; s.IncludeSharedBlueprints = chkShared.Checked; s.Save(); }
 
     void RefreshDbLabel()
     {
@@ -198,7 +200,7 @@ public class MainForm : Form
         SaveSettings(); log.Clear(); Busy(true); cts = new CancellationTokenSource(); bOpen.Enabled = false;
         var l = new Log(); l.OnLine += Line;
         var o = new Options { ModDir = tMod.Text, GlobalDir = tGlobal.Text, OutputDir = tOut.Text, RetocPath = Retoc, MaxTextureSize = MaxTex,
-                              Transparency = (TransparencyMode)Math.Max(0, cAlpha.SelectedIndex),
+                              Transparency = (TransparencyMode)Math.Max(0, cAlpha.SelectedIndex), IncludeSharedBlueprints = chkShared.Checked,
                               NameDbPath = File.Exists(Settings.NamesPath) ? Settings.NamesPath : null,
                               NewName = string.IsNullOrWhiteSpace(tName.Text) ? null : tName.Text.Trim(),
                               NameKey = cSlot.SelectedIndex > 0 ? ((string)cSlot.SelectedItem).Split(' ')[0] : null,

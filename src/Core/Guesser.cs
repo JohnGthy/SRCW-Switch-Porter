@@ -140,6 +140,15 @@ public class Guesser
     public static (string pkg, string cls) GuessClass(string objectName, string usage)
     {
         var n = objectName; var u = usage ?? "";
+        if (n.EndsWith("_C"))
+            return ("/Script/Engine", n.StartsWith("ABP", StringComparison.OrdinalIgnoreCase) || n.Contains("AnimBlueprint", StringComparison.OrdinalIgnoreCase)
+                                      || n.Contains("AnimLayer", StringComparison.OrdinalIgnoreCase) || n.Contains("LayerInterface", StringComparison.OrdinalIgnoreCase)
+                                      || u.Contains("AnimClass") || u.Contains("AnimBlueprint") ? "AnimBlueprintGeneratedClass" : "BlueprintGeneratedClass");
+        if (n.StartsWith("AM_") || u.Contains("Montage")) return ("/Script/Engine", "AnimMontage");
+        if (n.StartsWith("BS_") || n.StartsWith("BS1D_")) return ("/Script/Engine", n.Contains("1D") ? "BlendSpace1D" : "BlendSpace");
+        if (n.StartsWith("AO_")) return ("/Script/Engine", "AimOffsetBlendSpace");
+        if (n.StartsWith("AS_") || n.StartsWith("A_") || n.StartsWith("Anim_")) return ("/Script/Engine", "AnimSequence");
+        if (n.StartsWith("PA_") && !n.Contains("PhysicsAsset") && u.Contains("Physics")) return ("/Script/Engine", "PhysicsAsset");
         if (u.EndsWith("PhysicsAsset") || n.Contains("PhysicsAsset") || n.StartsWith("PA_")) return ("/Script/Engine", "PhysicsAsset");
         if (u.EndsWith("BoneCompressionSettings") || n.EndsWith("BoneCompressionSettings") || n.EndsWith("BoneCompression")) return ("/Script/Engine", "AnimBoneCompressionSettings");
         if (u.EndsWith("CurveCompressionSettings") || n.EndsWith("CurveCompressionSettings")) return ("/Script/Engine", "AnimCurveCompressionSettings");
