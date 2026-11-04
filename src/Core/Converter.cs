@@ -834,7 +834,12 @@ public class Converter
         if (tp == null || !byPackage.TryGetValue(Str(tp.ObjectName), out var tex)) return true;
         try { alphaCheck ??= new AlphaCheck(legacyRootForChecks); } catch { return true; }
         var f = alphaCheck.TransparentFraction(a.ShortName, tex.RelPath);
-        if (f == null) return true;   // couldn't measure: keep the old behaviour
+        if (f == null)
+        {   // couldn't measure: the transparency material darkens skin/clothes on Switch, so only hair-like materials get it
+            bool hairy = System.Text.RegularExpressions.Regex.IsMatch(a.ShortName, "hair|lash|brow|fur|lace|feather", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            log.Info($"{a.ShortName}: couldn't measure the alpha of {tex.ShortName} -> {(hairy ? "looks like hair, using the transparency material" : "using the normal material (set Transparency to Always if parts should be see-through)")}");
+            return hairy;
+        }
         bool cuts = f.Value > 0.02;
         log.Info($"{a.ShortName}: {f.Value:P1} of its model samples transparent alpha in {tex.ShortName} -> {(cuts ? "real cut-outs, using the transparency material" : "alpha is only padding, using the normal material")}");
         return cuts;
@@ -888,7 +893,9 @@ public class Converter
                                    .Where(i => i >= 0 && i < mesh.SkeletalMaterials.Length).Select(i => mesh.SkeletalMaterials[i].MaterialInterface?.Name).ToList();
                     var hit = mats.Where(n => n != null && reparented.Contains(n)).Distinct().ToList();
                     if (hit.Count == 0) continue;
-                    // disable the morph in any AnimBP that drives it
+                    // rename the morph inside the mesh, so nothing (mod AnimBP, game animation curves) can drive it
+                    bool inMesh = RenameMorphInMesh(m, mt.Name);
+                    // and disable it in any AnimBP of the mod that drives it
                     int renamed = 0;
                     foreach (var bp in animBps)
                     {
@@ -896,12 +903,33 @@ public class Converter
                         for (int i = 0; i < names.Count; i++)
                             if (names[i].Value == mt.Name) { bp.Asset.SetNameReference(i, new FString(mt.Name + "_Off")); bp.Dirty = true; renamed++; log.Change($"{bp.ShortName}: disabled morph target '{mt.Name}'"); }
                     }
-                    log.Warn(renamed > 0
+                    log.Warn(renamed > 0 || inMesh
                         ? $"{m.ShortName}: morph '{mt.Name}' moves {string.Join(", ", hit)}, which now uses a game material without morph support (it would render gray while active). The morph was switched off, so it no longer animates (e.g. a facial expression, or a shape that hides/reshapes part of the model)."
-                        : $"{m.ShortName}: morph '{mt.Name}' moves {string.Join(", ", hit)}, which now uses a game material without morph support. It isn't driven by the mod's AnimBP, so if that part looks gray in game, this is why.");
+                        : $"{m.ShortName}: morph '{mt.Name}' moves {string.Join(", ", hit)}, which now uses a game material without morph support and couldn't be switched off, so if that part looks gray in game, this is why.");
                 }
             }
-            catch (Exception ex) { log.Warn($"{m.ShortName}: could not check morph targets ({ex.Message})"); }
+            catch (Exception ex)
+            {
+                // can't read the mesh in detail (e.g. unversioned properties): if it uses any material that now runs on a
+                // game material, switch all its morphs off to be safe - a gray body part is worse than a lost expression
+                var morphs = m.Asset.Exports.Where(x => x.GetExportClassType()?.Value?.Value == "MorphTarget").Select(x => x.ObjectName.ToString()).ToList();
+                var usesReparented = m.Asset.Imports.Any(i => reparented.Contains(Str(i.ObjectName)));
+                if (morphs.Count == 0 || !usesReparented) { log.Info($"{m.ShortName}: morph targets not checked in detail ({ex.Message}); none affect converted materials"); continue; }
+                int n = morphs.Count(mn => RenameMorphInMesh(m, mn));
+                log.Warn($"{m.ShortName}: couldn't check which parts its {morphs.Count} morph target(s) move ({ex.Message}). Because it uses materials that now run on the game's material (which renders morphing parts gray), {n} morph(s) were switched off: {string.Join(", ", morphs.Take(12))}{(morphs.Count > 12 ? ", ..." : "")}.");
+            }
         }
+    }
+
+    /// <summary>Renames a MorphTarget export of a mesh (Name -> Name_Off) so no curve or AnimBP can find and drive it.</summary>
+    bool RenameMorphInMesh(ModAsset mesh, string morph)
+    {
+        var u = mesh.Asset;
+        var e = u.Exports.FirstOrDefault(x => x.GetExportClassType()?.Value?.Value == "MorphTarget" && x.ObjectName.ToString() == morph);
+        if (e == null) return false;
+        u.AddNameReference(new FString(morph + "_Off"));
+        e.ObjectName = N(u, morph + "_Off");
+        mesh.Dirty = true;
+        return true;
     }
 }

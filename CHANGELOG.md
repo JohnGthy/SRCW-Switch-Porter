@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8
+- Transparency check can now read BC7 textures. Before, BC7 color textures couldn't be measured and the parts fell back
+  to the transparency material (dark "shadow" on head, hands and body, e.g. Maria). If a texture still can't be measured,
+  only hair-like materials get the transparency material.
+- Morph targets on parts that now use the game's material are switched off inside the mesh itself, so the game's own
+  animation curves can no longer drive them either (gray body parts / clothes while a morph is active).
+- Meshes whose morph targets can't be inspected (unversioned assets) get their morphs switched off when they use
+  converted materials.
+
 ## 1.7
 - Files are placed by their real package name (fixes mods whose files are stored under unrelated paths, e.g. UI in the wrong folder).
 - Replacements of blueprints shared by the whole game (driver animation templates) are left out by default, with an

@@ -83,6 +83,22 @@ public class AlphaCheck
             }
             if (fmt.Contains("B8G8R8A8") || fmt.Contains("R8G8B8A8"))
             { for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) a[x, y] = d[(y * w + x) * 4 + 3]; return a; }
+            if (fmt.Contains("BC7"))
+            {
+                int bw = Math.Max(1, (w + 3) / 4), bh = Math.Max(1, (h + 3) / 4); Span<uint> px = stackalloc uint[16];
+                for (int by = 0; by < bh; by++)
+                    for (int bx = 0; bx < bw; bx++)
+                    {
+                        int o = (by * bw + bx) * 16; if (o + 16 > d.Length) continue;
+                        ThirdParty.Bc7Decoder.DecodeBC7Block(System.Runtime.InteropServices.MemoryMarshal.Read<UInt128>(d.AsSpan(o, 16)), px);
+                        for (int py = 0; py < 4; py++) for (int pxx = 0; pxx < 4; pxx++)
+                            {
+                                int x = bx * 4 + pxx, y = by * 4 + py; if (x >= w || y >= h) continue;
+                                a[x, y] = (byte)(px[py * 4 + pxx] >> 24);
+                            }
+                    }
+                return a;
+            }
             return null; // other formats: unknown
         }
         catch { return null; }
