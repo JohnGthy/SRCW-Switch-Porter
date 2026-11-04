@@ -75,7 +75,11 @@ public static class Naming
         foreach (var (lang, data) in baseText.OrderBy(k => k.Key))
         {
             var l = LocRes.Read(data); int n = 0;
-            foreach (var (key, text) in names) if (l.Set(Ns, key, text)) n++;
+            foreach (var (key, text) in names)
+            {   // "Namespace::Key" for other texts (machine names...), plain keys are character names
+                int sep = key.IndexOf("::", StringComparison.Ordinal);
+                if (sep > 0 ? l.Set(key[..sep], key[(sep + 2)..], text) : l.Set(Ns, key, text)) n++;
+            }
             var rel = $"UNION/Content/Localization/Game/{lang}/Game.locres"; var f = Path.Combine(dir, lang, "Game.locres");
             Directory.CreateDirectory(Path.GetDirectoryName(f)); File.WriteAllBytes(f, l.Write()); files[rel] = f;
         }

@@ -45,6 +45,30 @@ public static class TextureTools
         return true;
     }
 
+    /// <summary>Fills a (DXT5) texture's inline mips with one solid color.</summary>
+    public static bool MakeSolid(string uassetPath, byte r, byte g, byte b)
+    {
+        var u = new UAsset(uassetPath, EngineVersion.VER_UE5_4);
+        var e = u.Exports.OfType<NormalExport>().LastOrDefault(x => x.GetExportClassType()?.Value?.Value == "Texture2D");
+        if (e?.Extras == null) return false;
+        var x = e.Extras; int s = -1;
+        for (int i = 0; i + 8 < x.Length && i < 512; i++)
+        { int L = I32(x, i); if (L >= 5 && L <= 40 && i + 4 + L <= x.Length && x[i + 4] == 'P' && x[i + 5] == 'F' && x[i + 6] == '_' && x[i + 4 + L - 1] == 0) { s = i; break; } }
+        if (s < 12) return false;
+        bool hasOpt = (I32(x, s - 4) & 0x40000000) != 0;
+        int after = s + 4 + I32(x, s) + (hasOpt ? 8 : 0); int nm = I32(x, after + 4), p = after + 8;
+        ushort c = (ushort)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+        var block = new byte[] { 255, 255, 0, 0, 0, 0, 0, 0, (byte)c, (byte)(c >> 8), (byte)c, (byte)(c >> 8), 0, 0, 0, 0 };
+        for (int k = 0; k < nm; k++)
+        {
+            int idx = I32(x, p); if (idx < 0 || idx >= u.DataResources.Count) return false; var res = u.DataResources[idx]; p += 4;
+            if ((res.LegacyBulkDataFlags & ForceInline) != 0) { for (int q = 0; q < res.SerialSize; q++) x[p + q] = block[q % 16]; p += (int)res.SerialSize; }
+            p += 12;
+        }
+        e.Extras = x; u.Write(uassetPath);
+        return true;
+    }
+
     /// <returns>new size, or 0 if unchanged</returns>
     public static int Downscale(string uassetPath, int maxSize, Log log)
     {

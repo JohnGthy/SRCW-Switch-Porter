@@ -19,6 +19,9 @@ public class MainForm : Form
     readonly Button bConvert = new() { Text = "Convert for Switch", Height = 36 }, bOpen = new() { Text = "Open output folder", Enabled = false, Height = 36 },
                     bBuild = new() { Text = "Build database", AutoSize = true }, bCancel = new() { Text = "Cancel", Enabled = false, Height = 36 },
                     bNames = new() { Text = "Make names pak only", Height = 36 };
+    readonly Label lOpts = new() { AutoSize = true, ForeColor = Color.DimGray, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 3, 3), MaximumSize = new Size(560, 0) };
+    readonly Button bOpts = new() { Text = "Choose...", AutoSize = true, Enabled = false };
+    ModOptions mopts;
     readonly CheckBox chkShared = new() { Text = "Include shared game blueprints (risky: can break other characters)", AutoSize = true };
     readonly Label lDb = new() { AutoSize = true, ForeColor = Color.DimGray };
     readonly RichTextBox log = new() { ReadOnly = true, BackColor = Color.White, Font = new Font("Consolas", 9f), WordWrap = true, BorderStyle = BorderStyle.FixedSingle };
@@ -44,6 +47,8 @@ public class MainForm : Form
         AddRow(grid, "PC mod folder", tMod, () => PickFolder(tMod, "Folder containing the PC mod (.utoc / .ucas / .pak)"));
         AddRow(grid, "global.utoc / .ucas folder", tGlobal, () => PickFolder(tGlobal, "Folder that contains global.utoc and global.ucas"));
         AddRow(grid, "Output folder", tOut, () => PickFolder(tOut, "Where to write the Switch files"));
+        grid.Controls.Add(new Label { Text = "Mod parts / outfits", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
+        grid.Controls.Add(lOpts); grid.Controls.Add(bOpts);
         grid.Controls.Add(new Label { Text = "Max texture size", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
         cTex.Items.AddRange(new object[] { "Keep original", "2048", "1024 (recommended)", "512 (smallest, least stutter)" }); cTex.Width = 230;
         grid.Controls.Add(cTex); grid.Controls.Add(new Label());
@@ -101,9 +106,10 @@ public class MainForm : Form
         cAlpha.SelectedIndex = Math.Clamp(s.Transparency, 0, 2); chkShared.Checked = s.IncludeSharedBlueprints;
         cTex.SelectedIndex = s.MaxTexture switch { 0 => 0, 2048 => 1, 512 => 3, _ => 2 };
         if (!string.IsNullOrEmpty(s.LastModDir) && Directory.Exists(s.LastModDir)) SetMod(s.LastModDir);
-        tMod.TextChanged += (_, _) => { if (Directory.Exists(tMod.Text) && string.IsNullOrWhiteSpace(tOut.Text)) tOut.Text = Path.Combine(tMod.Text, "Switch port"); };
+        tMod.TextChanged += (_, _) => { if (Directory.Exists(tMod.Text) && string.IsNullOrWhiteSpace(tOut.Text)) tOut.Text = Path.Combine(tMod.Text, "Switch port"); LoadOpts(); };
         RefreshDbLabel();
 
+        bOpts.Click += (_, _) => { if (mopts != null && new OptionsDialog(mopts).ShowDialog(this) == DialogResult.OK) RefreshOpts(); };
         bConvert.Click += async (_, _) => await Convert();
         bNames.Click += async (_, _) => await NamesOnly();
         bCancel.Click += (_, _) => cts?.Cancel();
@@ -121,7 +127,21 @@ public class MainForm : Form
         if (!File.Exists(Retoc)) Line(Level.Error, $"bin\\retoc.exe is missing next to the program ({Retoc}). Re-extract the zip.");
     }
 
-    void SetMod(string p) { tMod.Text = p; tOut.Text = Path.Combine(p, "Switch port"); slotsLoadedFor = null; }
+    void SetMod(string p) { tMod.Text = p; tOut.Text = Path.Combine(p, "Switch port"); slotsLoadedFor = null; LoadOpts(); }
+
+    void LoadOpts()
+    {
+        mopts = null;
+        try { if (Directory.Exists(tMod.Text)) mopts = ModOptions.Load(tMod.Text); } catch { mopts = null; }
+        RefreshOpts();
+    }
+
+    void RefreshOpts()
+    {
+        bOpts.Enabled = mopts != null && mopts.Groups.Count > 0;
+        lOpts.Text = mopts == null || mopts.Groups.Count == 0 ? "(nothing to choose)"
+                   : (mopts.FromIni ? "From the mod's options: " : "Enabled parts: ") + mopts.Describe();
+    }
 
     void PickFile(TextBox t, string filter)
     {
@@ -207,6 +227,8 @@ public class MainForm : Form
                               SavedNames = new System.Collections.Generic.Dictionary<string, string>(s.Names),
                               BaseTextPath = string.IsNullOrWhiteSpace(tBaseText.Text) ? null : tBaseText.Text,
                               SavedBaseTextDir = Directory.Exists(Settings.BaseTextDir) ? Settings.BaseTextDir : null };
+        if (mopts != null && mopts.Groups.Count > 0 && string.Equals(mopts.ModDir, tMod.Text, StringComparison.OrdinalIgnoreCase))
+        { o.InputFiles = mopts.SelectedFiles(); o.PreferredContainers = mopts.OptionContainers(); o.OptionsSummary = mopts.Describe(); }
         Result r = null;
         try { r = await Task.Run(() => new Converter(o, l, cts.Token).Run()); }
         catch (Exception ex) { Line(Level.Error, ex.Message); }

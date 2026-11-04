@@ -31,6 +31,10 @@ public class Options
     public Dictionary<string, string> SavedNames = new();    // names set in earlier conversions (key -> name), all kept in one pak
     public string BaseTextPath;                              // optional: .pak or folder with Game.locres files
     public string SavedBaseTextDir;                          // game text saved when the name database was built
+    // ---- optional parts ----
+    public List<string> InputFiles;                          // files to convert (may end in .disabled); null = every enabled file in ModDir
+    public HashSet<string> PreferredContainers;              // containers of selected options: their copy of an asset wins
+    public string OptionsSummary;                            // shown in the report
 }
 
 public enum TransparencyMode { Auto, Never, Always }
@@ -74,10 +78,20 @@ public class Converter
             log.Info(db != null ? $"Using game name database ({db.Packages.Count} packages, built {db.Built:d})." : "No game name database: missing references will be found by name guessing.");
 
             // ---------- 1. inputs ----------
-            var utocs = Directory.GetFiles(o.ModDir, "*.utoc", SearchOption.AllDirectories)
-                                 .Where(f => !Path.GetFileName(f).Equals("global.utoc", StringComparison.OrdinalIgnoreCase)).ToList();
-            var paks = Directory.GetFiles(o.ModDir, "*.pak", SearchOption.AllDirectories).ToList();
-            var legacyPaks = paks.Where(p => !File.Exists(Path.ChangeExtension(p, ".utoc"))).ToList();
+            // files ending in ".disabled" are parts switched off in a PC mod manager; they're used only when picked in the options
+            static string Plain(string f) => f.EndsWith(".disabled", StringComparison.OrdinalIgnoreCase) ? f[..^".disabled".Length] : f;
+            var all = o.InputFiles ?? Directory.GetFiles(o.ModDir, "*", SearchOption.AllDirectories).Where(f => !f.EndsWith(".disabled", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (!string.IsNullOrEmpty(o.OptionsSummary)) log.Info("Mod options: " + o.OptionsSummary);
+            string Sibling(string f, string ext)
+            {
+                var want = Path.ChangeExtension(Plain(f), ext);
+                return all.FirstOrDefault(x => Plain(x).Equals(want, StringComparison.OrdinalIgnoreCase))
+                       ?? (File.Exists(want) ? want : File.Exists(want + ".disabled") ? want + ".disabled" : null);
+            }
+            var utocs = all.Where(f => Plain(f).EndsWith(".utoc", StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(Plain(f)).Equals("global.utoc", StringComparison.OrdinalIgnoreCase)).ToList();
+            var paks = all.Where(f => Plain(f).EndsWith(".pak", StringComparison.OrdinalIgnoreCase)).ToList();
+            var legacyPaks = paks.Where(p => Sibling(p, ".utoc") == null).ToList();
+            modTexts = ReadJsonTexts(all.Where(f => Plain(f).EndsWith(".json", StringComparison.OrdinalIgnoreCase)));
             if (utocs.Count == 0 && legacyPaks.Count == 0) throw new Exception("No .utoc or .pak files found in the mod folder.");
             var gUtoc = Path.Combine(o.GlobalDir ?? "", "global.utoc"); var gUcas = Path.Combine(o.GlobalDir ?? "", "global.ucas");
             if (utocs.Count > 0 && (!File.Exists(gUtoc) || !File.Exists(gUcas))) throw new Exception("global.utoc / global.ucas not found in the selected global files folder.");
@@ -96,11 +110,11 @@ public class Converter
                 var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var u in utocs)
                 {
-                    var stem = Path.GetFileNameWithoutExtension(u); var name = stem; int k = 2;
+                    var stem = Path.GetFileNameWithoutExtension(Plain(u)); var name = stem; int k = 2;
                     while (!used.Add(name)) name = stem + "_" + k++;
                     File.Copy(u, Path.Combine(inDir, name + ".utoc"), true);
-                    var ucas = Path.ChangeExtension(u, ".ucas");
-                    if (!File.Exists(ucas)) throw new Exception($"{Path.GetFileName(ucas)} is missing next to {Path.GetFileName(u)}.");
+                    var ucas = Sibling(u, ".ucas");
+                    if (ucas == null || !File.Exists(ucas)) throw new Exception($"{Path.GetFileName(Path.ChangeExtension(Plain(u), ".ucas"))} is missing next to {Path.GetFileName(u)}.");
                     File.Copy(ucas, Path.Combine(inDir, name + ".ucas"), true);
                     foreach (var pn in Manifest(Path.Combine(inDir, name + ".utoc"), work))
                     {
@@ -115,8 +129,14 @@ public class Converter
             }
 
             // legacy paks: assets are processed, anything else is copied unchanged
-            foreach (var p in legacyPaks)
+            foreach (var p0 in legacyPaks)
             {
+                var p = p0;
+                if (p.EndsWith(".disabled", StringComparison.OrdinalIgnoreCase))
+                {   // picked in the options: use it under its normal name
+                    var dir = Path.Combine(work, "enabled"); Directory.CreateDirectory(dir);
+                    p = Path.Combine(dir, Path.GetFileName(Plain(p0))); File.Copy(p0, p, true);
+                }
                 var name = PakName(Path.GetFileNameWithoutExtension(p));
                 var files = LegacyPakFiles(p, work, out var extractDir);
                 if (files == null) { log.Warn($"{Path.GetFileName(p)} could not be read; copied unchanged."); CopyOut(p, outPaks); res.Paks.Add(Path.GetFileName(p)); continue; }
@@ -179,6 +199,8 @@ public class Converter
             if (o.MaxTextureSize > 0)
                 foreach (var a in byPackage.Values.Where(a => !a.Removed && a.MainClass == "Texture2D" && !a.PackageName.Contains("/UI/", StringComparison.OrdinalIgnoreCase)))
                     try { TextureTools.Downscale(a.Path, o.MaxTextureSize, log); } catch (Exception ex) { log.Warn($"{a.ShortName}: texture not resized ({ex.Message})"); }
+
+            ValidateLinks();
 
             // ---------- 8. pack ----------
             var allOut = byPackage.Values.Where(a => !a.Removed).Concat(extraVersions).ToList();
@@ -249,8 +271,16 @@ public class Converter
     void DoNames(Result res, string outPaks, string work)
     {
         var names = new Dictionary<string, string>(o.SavedNames ?? new());
+        foreach (var (ns, key, val) in modTexts)
+        {
+            var k = ns == Naming.Ns ? key : ns + "::" + key;
+            names[k] = val;
+        }
+        if (modTexts.Count > 0) log.Info($"The mod's text files set {modTexts.Count} text(s): " + string.Join(", ", modTexts.Select(t => $"{t.key} = {t.value}")));
         bool wantName = !string.IsNullOrWhiteSpace(o.NewName);
         if (!wantName && names.Count == 0) return;           // nothing to do; text paks were copied as-is
+        if (!wantName && modTexts.Count > 0 && o.SavedBaseTextDir == null && o.BaseTextPath == null && modTextPak == null)
+        { log.Warn("The mod has text files (names), but no game text is available to put them in. Build the name database from your Switch dump (it saves your game's text) and convert again."); return; }
         // base game text: the mod's own text pak, then a user-picked one, then the text saved from the Switch dump
         Dictionary<string, byte[]> baseText = null; string from = null;
         foreach (var (src, label) in new[] { (modTextPak, "the mod's text pak"), (o.BaseTextPath, "the selected base text"), (o.SavedBaseTextDir, "your Switch dump") })
@@ -321,6 +351,19 @@ public class Converter
             try { foreach (var c in conts) { var f = Path.Combine(SepOut(c), main.RelPath); if (File.Exists(f)) copies.Add((c, f)); } }
             catch (Exception ex) { log.Warn($"Could not compare the copies of {main.ShortName}: {ex.Message}"); continue; }
             if (copies.Count < 2) continue;
+            // a selected option (outfit, accessory...) replaces the base mod's version of the same file
+            var pref = o.PreferredContainers == null ? default : copies.LastOrDefault(c => o.PreferredContainers.Contains(c.cont));
+            if (pref.cont != null)
+            {
+                foreach (var ext in new[] { ".uasset", ".uexp", ".ubulk", ".uptnl" })
+                {
+                    var src = Path.ChangeExtension(pref.path, ext); var dst = Path.ChangeExtension(main.Path, ext);
+                    if (File.Exists(src)) File.Copy(src, dst, true); else if (File.Exists(dst)) File.Delete(dst);
+                }
+                main.Asset = new UAsset(main.Path, EngineVersion.VER_UE5_4); main.Container = PakName(pref.cont);
+                log.Info($"{main.ShortName}: using the version from the selected option {pref.cont}.");
+                continue;
+            }
             // the converted (and later fixed) asset is the copy it matches; every other differing copy stays in its own pak
             var mine = copies.FirstOrDefault(c => Same(main.Path, c.path));
             if (mine.cont != null) main.Container = PakName(mine.cont);
@@ -508,6 +551,28 @@ public class Converter
             var shortName = pn[(pn.LastIndexOf('/') + 1)..];
             string objName = null, clsPkg = null, cls = null;
             if (db != null && db.Exports.TryGetValue(NameDb.Key(it.PkgId, it.Hash), out var ex)) { objName = ex.Name; clsPkg = ex.ClassPackage; cls = ex.ClassName; }
+            if (objName == null && byPackage.TryGetValue(pn, out var own) && !own.Removed)
+            {   // the package is part of this mod: compare against every object really inside it
+                var ou = own.Asset;
+                string PathOf(Export e)
+                {
+                    var parts = new List<string>(); var cur = e; int guard = 0;
+                    while (cur != null && guard++ < 16) { parts.Insert(0, Str(cur.ObjectName)); cur = cur.OuterIndex.IsExport() ? cur.OuterIndex.ToExport(ou) : null; }
+                    return string.Join("/", parts);
+                }
+                foreach (var e in ou.Exports)
+                {
+                    var path = PathOf(e);
+                    if (CityHash.ExportHash(path) != it.Hash && CityHash.ExportHash(path.Replace('/', '.')) != it.Hash && CityHash.ExportHash(path.Replace('/', ':')) != it.Hash) continue;
+                    if (e.OuterIndex.Index != 0) { log.Warn($"{it.A.ShortName}: refers to {path} inside {own.ShortName}, a sub-object that can't be linked here; left empty."); objName = ""; break; }
+                    var ct = e.ClassIndex.IsImport() ? e.ClassIndex.ToImport(ou) : null;
+                    objName = Str(e.ObjectName);
+                    if (ct != null) { clsPkg = Str(Outer(ou, ct)?.ObjectName); cls = Str(ct.ObjectName); }
+                    else if (e.ClassIndex.IsExport()) { clsPkg = pn; cls = Str(e.ClassIndex.ToExport(ou).ObjectName); }
+                    break;
+                }
+                if (objName == "") continue;
+            }
             if (objName == null)
                 foreach (var cand in new[] { shortName, shortName + "_C", "Default__" + shortName + "_C" })
                     if (CityHash.ExportHash(cand) == it.Hash)
@@ -557,6 +622,195 @@ public class Converter
 
     // ===================================================================== materials
     readonly List<ModAsset> makeInvisible = new();
+    readonly List<ModAsset> rebuildFromTextures = new();
+    List<(string ns, string key, string value)> modTexts = new();
+
+    /// <summary>Text replacements in the JSON format PC text loaders use: [{"Language","Namespace","Key","Value"}].</summary>
+    List<(string ns, string key, string value)> ReadJsonTexts(IEnumerable<string> files)
+    {
+        var res = new List<(string, string, string)>();
+        foreach (var f in files)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(f), new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+                if (doc.RootElement.ValueKind != JsonValueKind.Array) continue;
+                foreach (var e in doc.RootElement.EnumerateArray())
+                {
+                    string G(string n) => e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+                    var lang = G("Language"); var ns = G("Namespace"); var key = G("Key"); var val = G("Value");
+                    if (ns == null || key == null || val == null) continue;
+                    if (lang != null && !lang.Equals("en", StringComparison.OrdinalIgnoreCase)) continue;
+                    res.Add((ns, key, val));
+                }
+            }
+            catch (Exception ex) { log.Warn($"{Path.GetFileName(f)}: text file not read ({ex.Message})."); }
+        }
+        return res;
+    }
+    readonly List<(ModAsset a, string target, string bc, string n, string mro, string why)> rebuildWithTextures = new();
+
+    /// <summary>Packages of all textures a material instance sets, whatever the parameter names.</summary>
+    List<string> TextureParamValues(ModAsset a)
+    {
+        var res = new List<string>(); var u = a.Asset;
+        if (Prop(a.MainExport, "TextureParameterValues") is not ArrayPropertyData arr) return res;
+        foreach (var st in arr.Value.OfType<UAssetAPI.PropertyTypes.Structs.StructPropertyData>())
+        {
+            var ti = Imp(u, (st.Value.FirstOrDefault(p => Str(p.Name) == "ParameterValue") as ObjectPropertyData)?.Value);
+            var pk = ti == null ? null : ImportPackage(u, ti);
+            if (pk != null && !pk.StartsWith("/Engine/")) res.Add(pk);
+        }
+        return res;
+    }
+
+    /// <summary>The material's main color setting (own value, else the custom master's default).</summary>
+    (float, float, float)? PlainColor(ModAsset a, ModAsset master)
+    {
+        string[] names = { "Color", "BaseColor", "Base Color", "Albedo", "Tint", "DiffuseColor", "MainColor" };
+        if (Prop(a.MainExport, "VectorParameterValues") is ArrayPropertyData arr)
+            foreach (var st in arr.Value.OfType<UAssetAPI.PropertyTypes.Structs.StructPropertyData>())
+            {
+                var info = st.Value.FirstOrDefault(p => Str(p.Name) == "ParameterInfo") as UAssetAPI.PropertyTypes.Structs.StructPropertyData;
+                var n = (info?.Value.FirstOrDefault(p => Str(p.Name) == "Name") as NamePropertyData)?.Value?.ToString();
+                if (n == null || !names.Contains(n, StringComparer.OrdinalIgnoreCase)) continue;
+                if (st.Value.FirstOrDefault(p => Str(p.Name) == "ParameterValue") is UAssetAPI.PropertyTypes.Structs.LinearColorPropertyData lc)
+                    return (lc.Value.R, lc.Value.G, lc.Value.B);
+            }
+        try
+        {
+            matInfo ??= new MaterialInfo(legacyRootForChecks);
+            var d = matInfo.Get(master.RelPath);
+            if (d != null) foreach (var n in names) if (d.Vectors.TryGetValue(n, out var v)) return v;
+        }
+        catch { }
+        return null;
+    }
+
+    string SolidTexture(ModAsset near, (float r, float g, float b) col)
+    {
+        try
+        {
+            static byte S(float v) => (byte)Math.Clamp((int)Math.Round(255 * Math.Pow(Math.Clamp(v, 0, 1), 1 / 2.2)), 0, 255);
+            var dir = near.PackageName[..near.PackageName.LastIndexOf('/')];
+            var pkg = dir + "/T_SwitchPorter_" + near.ShortName + "_Color";
+            var path = Path.Combine(Path.GetDirectoryName(near.Path), "T_SwitchPorter_" + near.ShortName + "_Color.uasset");
+            ExtractTemplate("T_SwitchPorter_Clear", path, TplClear, pkg);
+            if (!TextureTools.MakeSolid(path, S(col.r), S(col.g), S(col.b))) return null;
+            byPackage[pkg] = new ModAsset { Path = path, RelPath = near.RelPath[..(near.RelPath.LastIndexOf('/') + 1)] + Path.GetFileName(path), PackageName = pkg, Asset = new UAsset(path, EngineVersion.VER_UE5_4), Container = near.Container };
+            return pkg;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Textures a material references: typed texture imports, plus packages that are textures in this mod (links the converter couldn't type).</summary>
+    List<string> TexturesUsedBy(ModAsset m)
+    {
+        var u = m.Asset;
+        return u.Imports.Where(i => Str(i.ClassName) == "Texture2D" || (i.OuterIndex.Index == 0 && byPackage.TryGetValue(Str(i.ObjectName), out var t) && t.MainClass == "Texture2D"))
+                        .Select(i => i.OuterIndex.Index == 0 ? Str(i.ObjectName) : ImportPackage(u, i))
+                        .Where(x => x != null && !x.StartsWith("/Engine/")).Distinct().ToList();
+    }
+
+    bool TexHasAlpha(string texPkg) => byPackage.TryGetValue(texPkg, out var ta) && AlphaFormats.Contains(TextureTools.PixelFormat(ta.Asset));
+
+    /// <summary>True when this texture's alpha really cuts holes in the parts drawn with the material.</summary>
+    bool AlphaCuts(string materialName, string texPkg)
+    {
+        if (!byPackage.TryGetValue(texPkg, out var tex)) return false;
+        try { alphaCheck ??= new AlphaCheck(legacyRootForChecks); } catch { return false; }
+        var f = alphaCheck.TransparentFraction(materialName, tex.RelPath);
+        if (f == null) return false;
+        bool cuts = f.Value > 0.02;
+        log.Info($"{materialName}: {f.Value:P1} of its model samples transparent alpha in {tex.ShortName} -> {(cuts ? "real cut-outs, using the transparency material" : "alpha is only padding, using the normal material")}");
+        return cuts;
+    }
+    MaterialInfo matInfo;
+
+    /// <summary>The mod's own master material at the root of an instance chain, or null.</summary>
+    ModAsset RootMaster(ModAsset a)
+    {
+        for (int guard = 0; a != null && guard < 10; guard++)
+        {
+            if (a.MainClass == "Material") return a;
+            var e = a.MainExport; if (e == null) return null;
+            var pImp = Imp(a.Asset, (Prop(e, "Parent") as ObjectPropertyData)?.Value); if (pImp == null) return null;
+            a = byPackage.TryGetValue(ImportPackage(a.Asset, pImp) ?? "", out var p) ? p : null;
+        }
+        return null;
+    }
+
+    /// <summary>Scalar and switch values that apply to a material instance: its own settings, then its parents', then the master's defaults.</summary>
+    Dictionary<string, float> EffectiveParams(ModAsset a)
+    {
+        var res = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+        for (int guard = 0; a != null && guard < 10; guard++)
+        {
+            if (a.MainClass == "Material")
+            {
+                try { matInfo ??= new MaterialInfo(legacyRootForChecks); } catch { break; }
+                var d = matInfo.Get(a.RelPath);
+                if (d != null)
+                {
+                    foreach (var kv in d.Scalars) res.TryAdd(kv.Key, kv.Value);
+                    foreach (var kv in d.Switches) res.TryAdd(kv.Key, kv.Value ? 1 : 0);
+                }
+                break;
+            }
+            var e = a.MainExport; if (e == null) break;
+            if (Prop(e, "ScalarParameterValues") is ArrayPropertyData sc)
+                foreach (var st in sc.Value.OfType<UAssetAPI.PropertyTypes.Structs.StructPropertyData>())
+                {
+                    var info = st.Value.FirstOrDefault(p => Str(p.Name) == "ParameterInfo") as UAssetAPI.PropertyTypes.Structs.StructPropertyData;
+                    var n = (info?.Value.FirstOrDefault(p => Str(p.Name) == "Name") as NamePropertyData)?.Value?.ToString();
+                    if (n != null && st.Value.FirstOrDefault(p => Str(p.Name) == "ParameterValue") is FloatPropertyData f) res.TryAdd(n, f.Value);
+                }
+            foreach (var spName in new[] { "StaticParametersRuntime", "StaticParameters" })
+                if (Prop(e, spName) is UAssetAPI.PropertyTypes.Structs.StructPropertyData sp
+                    && sp.Value.FirstOrDefault(p => Str(p.Name) == "StaticSwitchParameters") is ArrayPropertyData sw)
+                    foreach (var st in sw.Value.OfType<UAssetAPI.PropertyTypes.Structs.StructPropertyData>())
+                    {
+                        var info = st.Value.FirstOrDefault(p => Str(p.Name) == "ParameterInfo") as UAssetAPI.PropertyTypes.Structs.StructPropertyData;
+                        var n = (info?.Value.FirstOrDefault(p => Str(p.Name) == "Name") as NamePropertyData)?.Value?.ToString();
+                        if (n != null && st.Value.FirstOrDefault(p => Str(p.Name) == "Value") is BoolPropertyData b) res.TryAdd(n, b.Value ? 1 : 0);
+                    }
+            var pImp = Imp(a.Asset, (Prop(e, "Parent") as ObjectPropertyData)?.Value); if (pImp == null) break;
+            a = byPackage.TryGetValue(ImportPackage(a.Asset, pImp) ?? "", out var p) ? p : null;
+        }
+        return res;
+    }
+
+    static readonly System.Text.RegularExpressions.Regex RxTransform = new(@"ssj|ssgss|(^|[^a-z])(transform|transformed|transformation|shielded)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static List<string> Tokens(string s) => System.Text.RegularExpressions.Regex.Matches(s ?? "", "[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+").Select(m => m.Value.ToLowerInvariant()).ToList();
+
+    /// <summary>
+    /// Why a part drawn with a custom material should be hidden on Switch, or null. Custom PC materials can hide parts
+    /// with switches (an accessory toggled off), draw cartoon outlines, or show parts only while transformed; the game's
+    /// own material would draw all of those as solid, overlapping geometry.
+    /// </summary>
+    string HideReason(ModAsset mi, ModAsset master, Dictionary<string, float> eff)
+    {
+        string names = mi.ShortName + " " + master.ShortName;
+        if (names.Contains("outline", StringComparison.OrdinalIgnoreCase))
+            return "cartoon outline (a slightly bigger copy of the model drawn inside-out); the game's materials would draw it as a solid gray shell over the character, so it is hidden";
+        if (eff.Count == 0 && mi.MainExport != null) eff = EffectiveParams(mi);
+        if (eff.Count == 0) { try { matInfo ??= new MaterialInfo(legacyRootForChecks); var d = matInfo.Get(master.RelPath); if (d != null) { foreach (var kv in d.Scalars) eff.TryAdd(kv.Key, kv.Value); foreach (var kv in d.Switches) eff.TryAdd(kv.Key, kv.Value ? 1 : 0); } } catch { } }
+        var own = Tokens(mi.ShortName).Concat(Tokens(master.ShortName)).ToHashSet();
+        foreach (var (n, v) in eff)
+        {
+            bool off = Math.Abs(v) < 0.001f;
+            if (n.Length > 2 && n.EndsWith("On") && char.IsLower(n[^3]) is var _ && off)
+            {
+                var t = Tokens(n[..^2]);
+                if (t.Count > 0 && t.All(own.Contains)) return $"switched off by its setting '{n}' (an optional part, e.g. an accessory not selected); hidden";
+            }
+            if (n.ToLowerInvariant() is "visible" or "visibility" or "show" or "enabled" or "enable" && off) return $"switched off by its setting '{n}'; hidden";
+            if (n.ToLowerInvariant() is "hide" or "hidden" && !off) return $"hidden by its setting '{n}'";
+        }
+        if (RxTransform.IsMatch(names) && eff.Keys.Any(k => k.Contains("Shield", StringComparison.OrdinalIgnoreCase)))
+            return "only shown while transformed (shield/invincibility). The game's materials can't swap parts, so it is hidden to avoid overlapping models";
+        return null;
+    }
     readonly Dictionary<ModAsset, string> invisibleWhy = new();
     readonly List<ModAsset> convertMasters = new();
     readonly List<ModAsset> rebuildParentless = new();
@@ -579,6 +833,20 @@ public class Converter
 
     void RebuildParentless()
     {
+        foreach (var a in rebuildFromTextures)
+        {
+            try
+            {
+                var u = a.Asset;
+                var texs = u.Imports.Where(i => Str(i.ClassName) == "Texture2D").Select(i => ImportPackage(u, i)).Where(p => p != null).Distinct().ToList();
+                var (bc, nrm, mro) = ClassifyTextures(texs);
+                MakeInstance(a, CharaBasic, new() { ["Bc"] = bc, ["N"] = nrm, ["MRO"] = mro });
+                reparented.Add(a.ShortName);
+                log.Change($"{a.ShortName}: material instance of a custom PC material (stored in a compact format whose settings can't be read) -> rebuilt as an instance of M_Chara_Basic from its textures (Bc: {Short(bc) ?? "default"}, N: {Short(nrm) ?? "default"}, MRO: {Short(mro) ?? "default"})");
+                if (bc == null) log.Warn($"{a.ShortName}: no color texture recognised among {string.Join(", ", texs.Select(Short))}; it will look plain.");
+            }
+            catch (Exception ex) { log.Warn($"{a.ShortName}: could not rebuild ({ex.Message}); it may render with the wrong textures."); }
+        }
         foreach (var a in rebuildParentless)
         {
             try
@@ -612,9 +880,26 @@ public class Converter
         var customMasters = byPackage.Values.Where(a => a.MainClass == "Material").ToList();
         foreach (var m in customMasters) log.Info($"{m.ShortName}: custom master material (PC-only shaders) - parts using it will be moved to the game's materials.");
 
-        foreach (var a in byPackage.Values.Where(a => a.MainClass == "MaterialInstanceConstant"))
+        // read the instance chains before anything is changed (fixing a parent rewrites its settings)
+        var mics = byPackage.Values.Where(a => a.MainClass == "MaterialInstanceConstant").ToList();
+        var rootOf = mics.ToDictionary(a => a, RootMaster);
+        var effOf = mics.ToDictionary(a => a, a => a.MainExport == null ? new Dictionary<string, float>() : EffectiveParams(a));
+        foreach (var a in mics)
         {
-            var u = a.Asset; var e = a.MainExport; if (e == null) continue;
+            var u = a.Asset; var e = a.MainExport;
+            if (e == null)
+            {   // properties can't be read (unversioned asset): rebuild from the textures it references if its parent is custom
+                var parents = u.Imports.Where(i => Str(i.ClassName) is "MaterialInstanceConstant" or "Material" && !Str(i.ObjectName).StartsWith("Default__"))
+                                       .Select(i => ImportPackage(u, i)).Where(p => p != null && p != a.PackageName).ToList();
+                var cm = parents.Select(p => byPackage.TryGetValue(p, out var x) ? x : null).FirstOrDefault(x => x != null && x.MainClass == "Material");
+                if (cm != null || parents.Any(p => p.StartsWith("/Engine/Unresolved_")))
+                {
+                    if (cm != null && IsSeeThrough(cm)) { makeInvisible.Add(a); invisibleWhy[a] = "see-through (glass) material can't be reproduced on Switch; made invisible instead of solid"; }
+                    else if (cm != null && HideReason(a, cm, new()) is string hr) { makeInvisible.Add(a); invisibleWhy[a] = hr; }
+                    else rebuildFromTextures.Add(a);
+                }
+                continue;
+            }
             var parentProp = Prop(e, "Parent") as ObjectPropertyData;
             var pImp = Imp(u, parentProp?.Value); var pPkg = pImp == null ? null : ImportPackage(u, pImp);
             bool reparent = false; string why = null;
@@ -634,7 +919,11 @@ public class Converter
                     makeInvisible.Add(a);
                     invisibleWhy[a] = "only appears while shielded (a transformation/alternate model). The game's materials can't swap parts on shield, so it is hidden permanently to avoid overlapping models";
                 }
+                else if (HideReason(a, pa, effOf[a]) is string hr) { makeInvisible.Add(a); invisibleWhy[a] = hr; }
             }
+            else if (byPackage.TryGetValue(pPkg, out var pmi) && pmi.MainClass == "MaterialInstanceConstant" && rootOf[a] is ModAsset rm
+                     && HideReason(a, rm, effOf[a]) is string hr2)
+            { makeInvisible.Add(a); invisibleWhy[a] = hr2; }
             bool perm = (Prop(e, "bHasStaticPermutationResource") as BoolPropertyData)?.Value == true;
             if (!reparent && !perm) continue;
 
@@ -644,6 +933,26 @@ public class Converter
             e.Data.RemoveAll(p => Str(p.Name) is "bHasStaticPermutationResource" or "StaticParametersRuntime" or "StaticParameters" or "BasePropertyOverrides");
             int before = e.Extras.Length; e.Extras = e.Extras.Take(keep).ToArray();
 
+            if (reparent && !makeInvisible.Contains(a) && ParamTexture(a, "Bc") == null
+                && byPackage.TryGetValue(pPkg ?? "", out var cmaster) && cmaster.MainClass == "Material")
+            {   // its color texture comes from the custom master (or uses another parameter name): rebuild with the right textures
+                var own = TextureParamValues(a);
+                var mtex = TexturesUsedBy(cmaster);
+                var (bc, nrm, mro) = ClassifyTextures(own.Concat(mtex).Distinct().ToList());
+                if (bc == null && PlainColor(a, cmaster) is (float, float, float) col)
+                {   // no texture at all (e.g. a glowing halo with just a color): make a small texture of that color
+                    bc = SolidTexture(a, col);
+                    if (bc != null) log.Info($"{a.ShortName}: has no texture, only a color; using a solid-color texture.");
+                }
+                if (bc != null)
+                {
+                    bool alpha2 = o.Transparency == TransparencyMode.Always
+                        || (o.Transparency == TransparencyMode.Auto && (u.GetNameMapIndexList().Any(n => n.Value is "BLEND_Masked" or "BLEND_Translucent") || cmaster.Asset.GetNameMapIndexList().Any(n => n.Value is "BLEND_Masked" or "BLEND_Translucent"))
+                            && TexHasAlpha(bc) && AlphaCuts(a.ShortName, bc));
+                    rebuildWithTextures.Add((a, alpha2 ? CharaAfroHair : CharaBasic, bc, nrm, mro, why));
+                    continue;
+                }
+            }
             if (reparent)
             {
                 bool alpha = o.Transparency == TransparencyMode.Always
@@ -660,6 +969,17 @@ public class Converter
             }
             else log.Change($"{a.ShortName}: removed PC-only shader permutation ({before - keep:N0} bytes); keeps its game parent material");
             a.Dirty = true;
+        }
+
+        foreach (var (a, target, bc, nrm, mro, why) in rebuildWithTextures)
+        {
+            try
+            {
+                MakeInstance(a, target, new() { ["Bc"] = bc, ["N"] = nrm, ["MRO"] = mro });
+                reparented.Add(a.ShortName);
+                log.Change($"{a.ShortName}: {why}; its textures came from that material -> rebuilt as an instance of the game's {Short(target)}{(target == CharaAfroHair ? " (transparency)" : "")} (Bc: {Short(bc)}, N: {Short(nrm) ?? "default"}, MRO: {Short(mro) ?? "default"})");
+            }
+            catch (Exception ex) { log.Warn($"{a.ShortName}: could not rebuild ({ex.Message}); it may look plain."); }
         }
 
         // custom masters: rebuilt in place if a mesh (or other non-instance asset) uses them directly, otherwise dropped
@@ -742,8 +1062,8 @@ public class Converter
 
     static readonly System.Text.RegularExpressions.Regex RxNormal = new("(^|_)(n|nrm|nm|norm|normal|normalmap)([0-9_]*)$|normal", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     static readonly System.Text.RegularExpressions.Regex RxMro = new("(^|_)(mro|orm)([0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-    static readonly System.Text.RegularExpressions.Regex RxColor = new("(^|_)(alb|albedo|abd|diffuse|dif|diff|col|color|colour|basecolor|base|bc|d|c|tex|texture)([0-9_]*)$|albedo|diffuse|basecolor|base_color", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-    static readonly System.Text.RegularExpressions.Regex RxNotColor = new("(^|_)(mask|msk|alpha|opac|opacity|ao|rough|roughness|metal|metallic|spec|spc|specular|prm|pbr|emis|emissive|ems|e|e1|fal|nra|height|disp|sss|rim|matcap|lut|ramp|noise|flow|id)([0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static readonly System.Text.RegularExpressions.Regex RxColor = new("(^|_)(alb|albedo|abd|diffuse|dif|diff|di|dm|col|color|colour|basecolor|base|bc|d|c|tex|texture)([0-9_]*)$|albedo|diffuse|basecolor|base_color", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static readonly System.Text.RegularExpressions.Regex RxNotColor = new("(^|_)(mask|msk|alpha|opac|opacity|ao|rough|roughness|metal|metallic|spec|spc|specular|prm|pbr|emis|emissive|ems|e|e1|fal|nra|height|disp|sss|rim|matcap|lut|ramp|noise|flow|id|oc|occ|occlusion|li|line|lines|outline|pattern|cel|spm)([0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>Sorts a material's textures into color / normal / MRO using names and, for the mod's own textures, their compression format.</summary>
     (string bc, string n, string mro) ClassifyTextures(List<string> texs)
@@ -751,13 +1071,16 @@ public class Converter
         string Fmt(string pk) => byPackage.TryGetValue(pk, out var t) ? TextureTools.PixelFormat(t.Asset) : null;
         bool IsNormal(string pk) { var nm = Short(pk); return Fmt(pk) == "PF_BC5" || RxNormal.IsMatch(nm); }
         var normals = texs.Where(IsNormal).ToList();
-        var mro = texs.Except(normals).FirstOrDefault(t => RxMro.IsMatch(Short(t)));
-        var rest = texs.Except(normals).Where(t => t != mro).ToList();
+        var mros = texs.Except(normals).Where(t => RxMro.IsMatch(Short(t))).ToList();
+        var rest = texs.Except(normals).Except(mros).ToList();
         var bc = rest.FirstOrDefault(t => RxColor.IsMatch(Short(t)))
               ?? rest.Where(t => !RxNotColor.IsMatch(Short(t)))
                      .OrderByDescending(t => byPackage.TryGetValue(t, out var a) ? new FileInfo(Path.ChangeExtension(a.Path, ".ubulk")).Exists ? new FileInfo(Path.ChangeExtension(a.Path, ".ubulk")).Length : new FileInfo(Path.ChangeExtension(a.Path, ".uexp")).Length : 0)
                      .FirstOrDefault();
-        return (bc, normals.FirstOrDefault(), mro);
+        // normal / MRO maps: prefer the ones named like the color texture (goku_cloth_di -> goku_cloth_N, goku_cloth_MRO)
+        int Common(string x) { if (bc == null || x == null) return 0; var p = Short(bc).ToLowerInvariant(); var q = Short(x).ToLowerInvariant(); int i = 0; while (i < p.Length && i < q.Length && p[i] == q[i]) i++; return i; }
+        string Best(List<string> l) => l.OrderByDescending(Common).FirstOrDefault();
+        return (bc, Best(normals), Best(mros));
     }
 
     /// <summary>Custom master materials used directly by a mesh: rebuilt in place as instances of the game's materials.</summary>
@@ -768,11 +1091,16 @@ public class Converter
             try
             {
                 var u = m.Asset;
-                var texs = u.Imports.Where(i => Str(i.ClassName) == "Texture2D").Select(i => ImportPackage(u, i)).Where(p => p != null).ToList();
+                var texs = TexturesUsedBy(m);
                 if (IsSeeThrough(m))
                 {
                     MakeInstance(m, CharaAfroHair, new() { ["Bc"] = EnsureClearTexture(m) });
                     log.Change($"{m.ShortName}: see-through custom material used directly by a mesh -> made invisible (glass can't be reproduced on Switch)");
+                }
+                else if (HideReason(m, m, new()) is string hr)
+                {
+                    MakeInstance(m, CharaAfroHair, new() { ["Bc"] = EnsureClearTexture(m) });
+                    log.Change($"{m.ShortName}: {hr}");
                 }
                 else
                 {
@@ -822,6 +1150,14 @@ public class Converter
         {
             if (names[i].Value == oldPkg) u.SetNameReference(i, new FString(newPkg));
             else if (names[i].Value == oldName) u.SetNameReference(i, new FString(newName));
+        }
+        // Unreal stores names ending in _<number> as "base + number" (4_t01_0 -> "4_t01" #0): references to the
+        // renamed object from other packages use that split form, so the object's own name must use it too
+        var canon = N(u, newName);
+        if (canon.Number != 0)
+        {
+            foreach (var e in u.Exports) if (e.ObjectName?.Value?.Value == newName && e.ObjectName.Number == 0) e.ObjectName = N(u, newName);
+            foreach (var i in u.Imports) if (i.ObjectName?.Value?.Value == newName && i.ObjectName.Number == 0) i.ObjectName = N(u, newName);
         }
         u.Write(path);
     }
@@ -919,6 +1255,28 @@ public class Converter
                 log.Warn($"{m.ShortName}: couldn't check which parts its {morphs.Count} morph target(s) move ({ex.Message}). Because it uses materials that now run on the game's material (which renders morphing parts gray), {n} morph(s) were switched off: {string.Join(", ", morphs.Take(12))}{(morphs.Count > 12 ? ", ..." : "")}.");
             }
         }
+    }
+
+    /// <summary>Checks that every reference between the mod's own packages points to an object that really exists
+    /// (same name and number, as Unreal compares them); a broken link makes the game use a default (gray) asset.</summary>
+    void ValidateLinks()
+    {
+        var live = byPackage.Values.Where(a => !a.Removed).ToDictionary(a => a.PackageName, StringComparer.OrdinalIgnoreCase);
+        int bad = 0;
+        foreach (var a in live.Values)
+        {
+            UAsset u;
+            try { u = new UAsset(a.Path, EngineVersion.VER_UE5_4); } catch { continue; }
+            foreach (var imp in u.Imports.Where(i => i.OuterIndex.IsImport() && !Str(i.ObjectName).StartsWith("UnresolvedExport_")))
+            {
+                var outer = Outer(u, imp); if (outer == null || outer.OuterIndex.Index != 0) continue;   // only objects directly inside a package
+                var pkg = Str(outer.ObjectName); if (!live.TryGetValue(pkg, out var target) || target == a) continue;
+                UAsset tu; try { tu = new UAsset(target.Path, EngineVersion.VER_UE5_4); } catch { continue; }
+                bool found = tu.Exports.Any(e => e.OuterIndex.Index == 0 && e.ObjectName?.Value?.Value == imp.ObjectName?.Value?.Value && e.ObjectName.Number == imp.ObjectName.Number);
+                if (!found && bad++ < 30) log.Warn($"{a.ShortName}: links to {Str(imp.ObjectName)} in {target.ShortName}, but that object isn't there; the game will use a default asset instead.");
+            }
+        }
+        if (bad == 0) log.Info("Checked links between the mod's own files: all found.");
     }
 
     /// <summary>Renames a MorphTarget export of a mesh (Name -> Name_Off) so no curve or AnimBP can find and drive it.</summary>

@@ -23,6 +23,11 @@ Pick a PC mod folder, press **Convert for Switch**, and copy the resulting `atmo
 - Optionally lowers texture resolution to reduce stutter (UI textures are never touched).
 - Handles files duplicated across several containers of one mod.
 - Copies text and voice `.pak` files unchanged.
+- **Mod options:** reads a mod's `mod.ini` (outfits, accessories, transformations… as used by PC mod managers) or its
+  `.disabled` files and lets you choose which parts to convert; chosen options replace the base mod's files.
+- Hides parts that custom materials switch off (unselected accessories), cartoon outlines and transformation-only parts.
+- Restores textures that came from custom master materials; solid-color textures for color-only parts.
+- Puts `.json` text replacements from the mod (character / machine names) into the names pak.
 - **Character names:** rename the character a mod replaces (slot auto-detected), or rename characters without a skin
   mod. All names go into a single `SwitchPorter_Names_999_P.pak`.
 - Optional **game name database** built from your own Switch dump for fully exact conversions (only file indexes and

@@ -7,6 +7,14 @@ using SwitchPorter;
 if (args[0] == "--locres-roundtrip") { foreach (var f in args.Skip(1)) { var d = System.IO.File.ReadAllBytes(f); var l = LocRes.Read(d); Console.WriteLine($"{(l.Write().SequenceEqual(d) ? "IDENTICAL" : "DIFF")} {f} {l.Entries.Count()} entries"); } return; }
 if (args[0] == "--hash") { Console.WriteLine($"pkg {CityHash.PackageId(args[1]):x16}  export {CityHash.ExportHash(args[1]):x16}"); return; }
 var log = new Log(); log.OnLine += (l, m) => Console.WriteLine($"{l,-6} {m}");
+if (args[0] == "--list-options")
+{
+    var mo = ModOptions.Load(args[1]); if (args.Length > 2) mo.Apply(args[2]);
+    Console.WriteLine($"{mo.Title} (from mod.ini: {mo.FromIni})");
+    foreach (var g in mo.Groups) Console.WriteLine($"  {g.Name} [{(g.Multiple ? "multi" : "one")}]: {string.Join(" | ", g.Choices.Select(c => (g.Selected.Contains(c) ? "*" : "") + c))}");
+    foreach (var f in mo.SelectedFiles()) Console.WriteLine("    " + f);
+    Console.WriteLine("  prefer: " + string.Join(", ", mo.OptionContainers())); return;
+}
 if (args[0] == "--build-db")
 {
     var db = NameDb.BuildFromDump(args[1], args.Length > 3 ? args[3] : null, AppContext.BaseDirectory, log, (d, t) => Console.Write($"\r{d}/{t}   "), default);
@@ -27,6 +35,8 @@ int ni = Array.IndexOf(args, "--name"); if (ni >= 0) o.NewName = args[ni + 1];
 int ki = Array.IndexOf(args, "--name-key"); if (ki >= 0) o.NameKey = args[ki + 1];
 int bi = Array.IndexOf(args, "--base-text"); if (bi >= 0) o.BaseTextPath = args[bi + 1];
 int si = Array.IndexOf(args, "--saved"); if (si >= 0) foreach (var kv in args[si + 1].Split(',')) { var p2 = kv.Split('='); o.SavedNames[p2[0]] = p2[1]; }
+int oi = Array.IndexOf(args, "--options");
+if (oi >= 0) { var mo = ModOptions.Load(o.ModDir); mo.Apply(args[oi + 1]); o.InputFiles = mo.SelectedFiles(); o.PreferredContainers = mo.OptionContainers(); o.OptionsSummary = mo.Describe(); }
 if (o.KeepWorkDir) o.WorkDir = System.IO.Path.Combine(o.OutputDir, "_work");
 var r = new Converter(o, log).Run();
 Console.WriteLine($"success={r.Success} warnings={log.Warnings} errors={log.Errors}");

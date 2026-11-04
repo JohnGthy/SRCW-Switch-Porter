@@ -1,4 +1,4 @@
-SRCW Switch Porter 1.8
+SRCW Switch Porter 1.9
 ======================
 Converts Sonic Racing CrossWorlds PC skin mods so they work on the Nintendo Switch version.
 
@@ -7,6 +7,9 @@ HOW TO USE
 2. PC mod folder: the folder with the mod's .utoc / .ucas / .pak files (you can drag it onto the window).
 3. global.utoc / .ucas folder: a folder containing global.utoc and global.ucas from the PC game
    (UNION\Content\Paks). Remembered after the first time.
+   "Mod parts / outfits": if the mod has options (a mod.ini like PC mod managers use, or files ending in
+   ".disabled"), press "Choose..." to pick the outfit, accessories, transformation, etc. Only the chosen
+   parts are converted. Without a choice, the parts that are currently enabled in the folder are used.
 4. Pick a max texture size (1024 recommended; 512 if the game stutters), then press "Convert for Switch".
    "Transparency material": Auto checks whether a texture's alpha really cuts holes in the model (hair,
    lace...) and only then uses the game's M_Chara_AfroHair; otherwise M_Chara_Basic. If a part looks dark or
@@ -39,6 +42,15 @@ WHAT IT DOES AUTOMATICALLY
 - Leaves out replacements of blueprints shared by the whole game (e.g. driver animation templates) unless
   "Include shared game blueprints" is ticked: made for another game version, they can break every racer.
 - Copies text/audio .pak files unchanged.
+- Mods with options (mod.ini / .disabled files): only the chosen parts are converted, and a chosen
+  outfit/accessory replaces the base mod's version of the same file.
+- Hides parts a custom material switches off (e.g. an accessory not chosen), cartoon outlines (they would
+  become a gray shell over the model) and parts only shown while transformed.
+- Materials whose textures were set inside the custom PC material (or use other texture names) get those
+  textures back; parts with only a color (e.g. a halo) get a solid-color texture.
+- Name texts from the mod's .json text files (e.g. "chara12001" = "GOKU", machine names) go into the
+  names pak (needs the game's text, see below).
+- Checks that the mod's own files link to each other correctly and reports any broken link.
 
 CHARACTER NAMES (OPTIONAL)
 Type a "New name" to rename the character the mod replaces. The name slot is detected from the mod's

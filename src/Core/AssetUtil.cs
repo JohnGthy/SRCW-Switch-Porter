@@ -19,9 +19,9 @@ public class ModAsset
     public bool Dirty, Removed;
     public string Container;     // output pak name
     public string ShortName => PackageName.Substring(PackageName.LastIndexOf('/') + 1);
-    public string MainClass => Asset.Exports.FirstOrDefault(e => e.ObjectName.Value.Value == ShortName)?.GetExportClassType()?.Value?.Value
+    public string MainClass => Asset.Exports.FirstOrDefault(e => e.ObjectName?.ToString() == ShortName)?.GetExportClassType()?.Value?.Value
                                ?? Asset.Exports.LastOrDefault()?.GetExportClassType()?.Value?.Value;
-    public NormalExport MainExport => Asset.Exports.OfType<NormalExport>().FirstOrDefault(e => e.ObjectName.Value.Value == ShortName);
+    public NormalExport MainExport => Asset.Exports.OfType<NormalExport>().FirstOrDefault(e => e.ObjectName?.ToString() == ShortName);
 }
 
 public static class AssetUtil

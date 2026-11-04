@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.9
+- **Mod parts / outfits:** mods with a `mod.ini` (PC mod manager options) or `.disabled` files get a "Choose..." dialog
+  to pick outfits, accessories, transformations and add-ons; only those parts are converted, and a chosen option's
+  files replace the base mod's copies.
+- Fixed materials whose names end in `_<number>` (e.g. `4_t01_0`): the rebuilt material wasn't found by the mesh, so
+  the model showed the default gray checker material (Jack Frost).
+- Materials whose textures were set inside the custom PC master (or under other parameter names) are rebuilt with
+  those textures instead of plain gray (Goku).
+- Parts hidden by the custom material are hidden on Switch too: switches such as `GokuHaloOn` that are off, cartoon
+  outlines (inside-out shells that became a gray layer over the model) and transformation-only parts.
+- Color-only parts (e.g. a halo) get a solid-color texture.
+- Material instances stored in the compact (unversioned) format are rebuilt from their own textures (Zelda's eyes, face
+  and hair had the body texture).
+- Links between the mod's own files are checked and broken ones reported; references into the mod's own packages are
+  matched exactly.
+- Text replacements from the mod's `.json` files go into the names pak.
+- Better color / normal / MRO texture detection (`_di`, `_dm`, line/occlusion maps ignored, matching names preferred).
+
 ## 1.8
 - Transparency check can now read BC7 textures. Before, BC7 color textures couldn't be measured and the parts fell back
   to the transparency material (dark "shadow" on head, hands and body, e.g. Maria). If a texture still can't be measured,
