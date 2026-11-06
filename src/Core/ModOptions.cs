@@ -61,13 +61,14 @@ public class ModOptions
                 continue;
             }
             int eq = line.IndexOf('='); if (eq < 0) continue;
-            var k = line[..eq].Trim(); var v = line[(eq + 1)..].Trim();
+            static string Unquote(string x) { x = x.Trim(); return x.Length >= 2 && x[0] == '"' && x[^1] == '"' ? x[1..^1].Trim() : x.Trim('"').Trim(); }
+            var k = Unquote(line[..eq]); var v = Unquote(line[(eq + 1)..]);
             if (section != null && section.Equals("Main", StringComparison.OrdinalIgnoreCase) && k.Equals("Name", StringComparison.OrdinalIgnoreCase)) Title = v;
             else if (cur != null)
             {
                 if (k.Equals("Type", StringComparison.OrdinalIgnoreCase)) cur.Multiple = v.Contains("Multiple", StringComparison.OrdinalIgnoreCase);
                 else if (k.Equals("Description", StringComparison.OrdinalIgnoreCase)) cur.Description = v;
-                else if (k.Equals("Options", StringComparison.OrdinalIgnoreCase)) cur.Choices = v.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                else if (k.Equals("Options", StringComparison.OrdinalIgnoreCase)) cur.Choices = v.Split(',').Select(x => x.Trim().Trim('"').Trim()).Where(x => x.Length > 0).ToList();
             }
             else if (section != null && section.Equals("Files", StringComparison.OrdinalIgnoreCase))
                 (fileRules.TryGetValue(Norm(k), out var l) ? l : fileRules[Norm(k)] = new()).Add(v);

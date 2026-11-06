@@ -1,5 +1,5 @@
-SRCW Switch Porter 1.9.2
-========================
+SRCW Switch Porter 1.10.1
+=========================
 Converts Sonic Racing CrossWorlds PC skin mods so they work on the Nintendo Switch version.
 
 HOW TO USE
@@ -10,6 +10,9 @@ HOW TO USE
    "Mod parts / outfits": if the mod has options (a mod.ini like PC mod managers use, or files ending in
    ".disabled"), press "Choose..." to pick the outfit, accessories, transformation, etc. Only the chosen
    parts are converted. Without a choice, the parts that are currently enabled in the folder are used.
+   "Character slot" (in Conversion settings): for main-cast characters, put the skin on the base character
+   or on its alternate / AI version instead of the slot the mod was made for. The character's voice bank
+   is converted for that slot too.
 4. Pick a max texture size (1024 recommended; 512 if the game stutters), then press "Convert for Switch".
    "Transparency material": Auto checks whether a texture's alpha really cuts holes in the model (hair,
    lace...) and only then uses the game's M_Chara_AfroHair; otherwise M_Chara_Basic. If a part looks dark or

@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.10.1
+- Character slot: main-cast voice banks follow the skin to the other slot. The bank and all of its cue names are
+  renamed for that slot (e.g. VOICE_XXX <-> VOICE_XXXAI); the audio itself is unchanged. If the mod already has its
+  own voice bank for the other slot, that one is used instead.
+- Character slot: fixed moved models showing the default checker material when material names end in a number
+  (links to those materials weren't updated).
+- Character slot: a skin is now moved completely or not at all. If the chosen parts already include both the base and
+  the alternate version, nothing is moved (pick the versions with the mod's own options instead).
+- The link check also reports references to files that were moved to the other slot.
+
+## 1.10
+- **Character slot:** a main-cast skin can be moved between the character's base slot and its alternate (AI) slot
+  ("Conversion settings" -> "Character slot"). The mod's own model, skeleton, animation blueprint, materials and
+  select-screen icons are moved and renamed; references to the game's own assets are switched only when the name
+  database confirms the other slot has them. Guest characters keep their slot.
+- Legacy .pak files that hold both assets and other files (e.g. sound cues plus their sound bank) keep those other
+  files when repacked. Before, the sound bank was dropped, which could crash the game.
+- Morph targets that are switched off are also removed from the model's morph list, so parts using the game's
+  materials no longer fall back to the gray checker material.
+- mod.ini values in quotes (e.g. Options = "Off,On") are read correctly.
+
 ## 1.9.2
 - Cut-out materials: custom materials that take their shape from a black/white mask texture (clouds, foliage, flames on
   flat cards) and their color from a setting are rebuilt with a cut-out copy of the mask in that color, using the

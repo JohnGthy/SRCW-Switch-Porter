@@ -27,6 +27,7 @@ Pick a PC mod folder, press **Convert for Switch**, and copy the resulting `atmo
   `.disabled` files and lets you choose which parts to convert; chosen options replace the base mod's files.
 - Hides parts that custom materials switch off (unselected accessories), cartoon outlines and transformation-only parts.
 - Restores textures that came from custom master materials; solid-color textures for color-only parts.
+- **Character slot:** moves a main-cast skin between the character's base slot and its alternate (AI) slot.
 - Puts `.json` text replacements from the mod (character / machine names) into the names pak.
 - **Character names:** rename the character a mod replaces (slot auto-detected), or rename characters without a skin
   mod. All names go into a single `SwitchPorter_Names_999_P.pak`.

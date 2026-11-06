@@ -35,7 +35,10 @@ public class Options
     public List<string> InputFiles;                          // files to convert (may end in .disabled); null = every enabled file in ModDir
     public HashSet<string> PreferredContainers;              // containers of selected options: their copy of an asset wins
     public string OptionsSummary;                            // shown in the report
+    public SlotTarget Slot = SlotTarget.Keep;                // move a main-cast skin to the base or alt (AI) slot
 }
+
+public enum SlotTarget { Keep, Base, Alt }
 
 public enum TransparencyMode { Auto, Never, Always }
 
@@ -129,6 +132,20 @@ public class Converter
             }
 
             // legacy paks: assets are processed, anything else is copied unchanged
+            // voice banks of every selected pak (to know if the mod already has a bank for the other slot)
+            var pakLists = new Dictionary<string, (List<string> files, string dir)>();
+            var allBanks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p0 in legacyPaks)
+            {
+                var src = p0;
+                if (src.EndsWith(".disabled", StringComparison.OrdinalIgnoreCase))
+                {
+                    var dir = Path.Combine(work, "enabled"); Directory.CreateDirectory(dir);
+                    src = Path.Combine(dir, Path.GetFileName(Plain(p0))); File.Copy(p0, src, true);
+                }
+                var fl = LegacyPakFiles(src, work, out var ed); pakLists[p0] = (fl, ed);
+                foreach (var f in fl ?? new()) { var m = RxBankFile.Match(f); if (m.Success) allBanks.Add(m.Groups[1].Value); }
+            }
             foreach (var p0 in legacyPaks)
             {
                 var p = p0;
@@ -138,7 +155,9 @@ public class Converter
                     p = Path.Combine(dir, Path.GetFileName(Plain(p0))); File.Copy(p0, p, true);
                 }
                 var name = PakName(Path.GetFileNameWithoutExtension(p));
-                var files = LegacyPakFiles(p, work, out var extractDir);
+                var (files, extractDir) = pakLists[p0];
+                if (files != null && o.Slot != SlotTarget.Keep && RetargetVoicePak(p, files, extractDir, allBanks, outPaks, work) is string vp)
+                { res.Paks.Add(Path.GetFileName(vp)); continue; }
                 if (files == null) { log.Warn($"{Path.GetFileName(p)} could not be read; copied unchanged."); CopyOut(p, outPaks); res.Paks.Add(Path.GetFileName(p)); continue; }
                 if (files.Any(f => f.EndsWith("/Game.locres", StringComparison.OrdinalIgnoreCase)) && !files.Any(f => f.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase)))
                     modTextPak = p;
@@ -153,6 +172,8 @@ public class Converter
                     var dst = Path.Combine(legacyRoot, f); Directory.CreateDirectory(Path.GetDirectoryName(dst));
                     File.Copy(Path.Combine(extractDir, f), dst, true);
                     if (f.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".umap", StringComparison.OrdinalIgnoreCase)) containerOf[PackageNameFromRel(f)] = name;
+                    else if (!new[] { ".uexp", ".ubulk", ".uptnl" }.Any(x => f.EndsWith(x, StringComparison.OrdinalIgnoreCase)))
+                        looseFiles.Add((name, f.Replace('\\', '/'), Path.Combine(extractDir, f)));   // sound banks, text... kept as they are
                 }
                 log.Info($"{Path.GetFileName(p)}: legacy pak with assets, will be checked and repacked.");
             }
@@ -200,6 +221,7 @@ public class Converter
                 foreach (var a in byPackage.Values.Where(a => !a.Removed && a.MainClass == "Texture2D" && !a.PackageName.Contains("/UI/", StringComparison.OrdinalIgnoreCase)))
                     try { TextureTools.Downscale(a.Path, o.MaxTextureSize, log); } catch (Exception ex) { log.Warn($"{a.ShortName}: texture not resized ({ex.Message})"); }
 
+            if (o.Slot != SlotTarget.Keep) Retarget(o.Slot);
             ValidateLinks();
 
             // ---------- 8. pack ----------
@@ -216,10 +238,19 @@ public class Converter
                         if ((ext is ".uasset" or ".umap") && f != a.Path) continue;
                         if (File.Exists(f)) files[CanonicalRel(a.PackageName, ext)] = f;
                     }
+                foreach (var lf in looseFiles.Where(l => l.container == grp.Key)) files[lf.rel] = lf.src;
                 var pak = Path.Combine(outPaks, grp.Key + ".pak");
                 PakWriter.Write(pak, files);
                 res.Paks.Add(grp.Key + ".pak");
-                log.Info($"Wrote {grp.Key}.pak ({grp.Count()} asset(s), {new FileInfo(pak).Length / 1024} KB)");
+                int nLoose = looseFiles.Count(l => l.container == grp.Key);
+                log.Info($"Wrote {grp.Key}.pak ({grp.Count()} asset(s){(nLoose > 0 ? $" + {nLoose} other file(s) such as sound banks" : "")}, {new FileInfo(pak).Length / 1024} KB)");
+            }
+            foreach (var cg in looseFiles.GroupBy(l => l.container).Where(g => !allOut.Any(a => a.Container == g.Key)))
+            {   // only non-asset files are left in this pak
+                var pak = Path.Combine(outPaks, cg.Key + ".pak");
+                PakWriter.Write(pak, cg.ToDictionary(l => l.rel, l => l.src));
+                res.Paks.Add(cg.Key + ".pak");
+                log.Info($"Wrote {cg.Key}.pak ({cg.Count()} file(s), {new FileInfo(pak).Length / 1024} KB)");
             }
             DoNames(res, outPaks, work);
             res.Success = log.Errors == 0;
@@ -623,6 +654,7 @@ public class Converter
     // ===================================================================== materials
     readonly List<ModAsset> makeInvisible = new();
     readonly List<ModAsset> rebuildFromTextures = new();
+    readonly List<(string container, string rel, string src)> looseFiles = new();   // non-asset files of legacy paks
     List<(string ns, string key, string value)> modTexts = new();
 
     /// <summary>Text replacements in the JSON format PC text loaders use: [{"Language","Namespace","Key","Value"}].</summary>
@@ -1322,13 +1354,214 @@ public class Converter
             foreach (var imp in u.Imports.Where(i => i.OuterIndex.IsImport() && !Str(i.ObjectName).StartsWith("UnresolvedExport_")))
             {
                 var outer = Outer(u, imp); if (outer == null || outer.OuterIndex.Index != 0) continue;   // only objects directly inside a package
-                var pkg = Str(outer.ObjectName); if (!live.TryGetValue(pkg, out var target) || target == a) continue;
+                var pkg = Str(outer.ObjectName);
+                if (movedAway.Contains(pkg) && !live.ContainsKey(pkg))
+                { if (bad++ < 30) log.Warn($"{a.ShortName}: still links to {pkg}, which was moved to the other character slot; the game will use a default asset instead."); continue; }
+                if (!live.TryGetValue(pkg, out var target) || target == a) continue;
                 UAsset tu; try { tu = new UAsset(target.Path, EngineVersion.VER_UE5_4); } catch { continue; }
                 bool found = tu.Exports.Any(e => e.OuterIndex.Index == 0 && e.ObjectName?.Value?.Value == imp.ObjectName?.Value?.Value && e.ObjectName.Number == imp.ObjectName.Number);
                 if (!found && bad++ < 30) log.Warn($"{a.ShortName}: links to {Str(imp.ObjectName)} in {target.ShortName}, but that object isn't there; the game will use a default asset instead.");
             }
         }
         if (bad == 0) log.Info("Checked links between the mod's own files: all found.");
+    }
+
+    static readonly System.Text.RegularExpressions.Regex RxBankFile = new(@"(?:^|/)CriWareData/(VOICE_[A-Z]+)\.(acb|awb)$");
+
+    /// <summary>
+    /// A pak with a main-cast voice bank (CriWareData/VOICE_EGG.acb + .awb): when the skin goes to the other slot,
+    /// the bank is rewritten for that slot (VOICE_EGGAI, cue names voice_eggAI_...) and repacked. Null if not applicable.
+    /// </summary>
+    string RetargetVoicePak(string pak, List<string> files, string extractDir, HashSet<string> allBanks, string outPaks, string work)
+    {
+        bool toAlt = o.Slot == SlotTarget.Alt;
+        var banks = files.Select(f => RxBankFile.Match(f)).Where(m => m.Success && m.Groups[2].Value == "acb").Select(m => m.Groups[1].Value).Distinct().ToList();
+        var renames = new Dictionary<string, string>();
+        foreach (var bank in banks)
+        {
+            var other = AcbTools.OtherSlotBank(bank, toAlt); if (other == null) continue;
+            if (allBanks.Contains(other)) { log.Info($"{Path.GetFileName(pak)}: the mod also has its own {other} voice bank for the {(toAlt ? "alternate" : "base")} slot; this one was left as it is."); continue; }
+            renames[bank] = other;
+        }
+        if (renames.Count == 0) return null;
+        var outFiles = new Dictionary<string, string>();
+        var vdir = Path.Combine(work, "voice_" + Path.GetFileNameWithoutExtension(pak)); Directory.CreateDirectory(vdir);
+        foreach (var f in files)
+        {
+            var src = Path.Combine(extractDir, f); var rel = f.Replace('\\', '/');
+            var m = RxBankFile.Match(rel);
+            if (m.Success && renames.TryGetValue(m.Groups[1].Value, out var nb))
+            {
+                var newRel = rel[..m.Groups[1].Index] + nb + "." + m.Groups[2].Value;
+                if (m.Groups[2].Value == "acb")
+                {
+                    var outp = Path.Combine(vdir, nb + ".acb");
+                    try { File.WriteAllBytes(outp, AcbTools.RetargetVoiceBank(File.ReadAllBytes(src), m.Groups[1].Value, nb)); }
+                    catch (Exception ex) { log.Warn($"{Path.GetFileName(pak)}: couldn't convert the {m.Groups[1].Value} voice bank ({ex.Message}); copied unchanged."); return null; }
+                    outFiles[newRel] = outp;
+                }
+                else outFiles[newRel] = src;
+                continue;
+            }
+            // loose streaming files of the bank (CriWareData/VOICE_EGG/...) aren't used by the game; keep them as they are
+            outFiles[rel] = src;
+        }
+        var outPak = Path.Combine(outPaks, PakName(Path.GetFileNameWithoutExtension(pak)) + ".pak");
+        PakWriter.Write(outPak, outFiles);
+        foreach (var (a, b2) in renames)
+            log.Change($"{Path.GetFileName(pak)}: voice bank {a} converted to {b2} for the {(toAlt ? "alternate (AI)" : "base")} slot (bank and cue names renamed, same audio).");
+        return outPak;
+    }
+
+    // ===================================================================== base / alt slot
+    const string CharRoot = "/Game/01_Union/Asset/Character/";
+    readonly HashSet<string> movedAway = new(StringComparer.OrdinalIgnoreCase);   // package names the slot move renamed
+
+    /// <summary>
+    /// Moves a main-cast skin between the character's base slot (Character/Shadow/…/SK_Shadow, UI …_sha_01) and its
+    /// alternate/AI slot (Character/Skin/ShadowSkin/…/SK_ShadowSkin, UI …_sha_02). Only the mod's own files are moved and
+    /// renamed; references to the game's own assets are switched only when the name database confirms the other slot
+    /// has the same asset.
+    /// </summary>
+    void Retarget(SlotTarget target)
+    {
+        var live = byPackage.Values.Where(a => !a.Removed).ToList();
+        // which character and which slot is the mod made for?
+        string ch = null; SlotTarget from = SlotTarget.Keep; bool hasBase = false, hasAlt = false;
+        foreach (var a in live.Where(a => a.MainClass == "SkeletalMesh"))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(a.PackageName, "^" + CharRoot + "Skin/([A-Za-z0-9]+)Skin/Mesh/SK_\\1Skin(side)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (m.Success) { ch ??= m.Groups[1].Value; hasAlt = true; continue; }
+            m = System.Text.RegularExpressions.Regex.Match(a.PackageName, "^" + CharRoot + "([A-Za-z0-9]+)/Mesh/SK_([A-Za-z0-9]+?)(side)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (m.Success && m.Groups[1].Value.Equals(m.Groups[2].Value, StringComparison.OrdinalIgnoreCase) && !m.Groups[1].Value.StartsWith("Extnd", StringComparison.OrdinalIgnoreCase))
+            { ch ??= m.Groups[1].Value; hasBase = true; }
+        }
+        if (hasBase && hasAlt)
+        {
+            log.Warn($"Character slot: the parts you picked already include both the base and the alternate (AI) version of {ch}, so nothing was moved. Use the mod's own options (\"Choose...\") to pick which version(s) to include.");
+            return;
+        }
+        from = hasAlt ? SlotTarget.Alt : hasBase ? SlotTarget.Base : SlotTarget.Keep;
+        string abbr = null; int uiSlot = 0;
+        foreach (var a in live)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(a.ShortName, "^UI_.*?_([a-z]{3,5})_0([12])$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (m.Success) { abbr = m.Groups[1].Value; uiSlot = int.Parse(m.Groups[2].Value); break; }
+        }
+        if (from == SlotTarget.Keep && uiSlot > 0) from = uiSlot == 1 ? SlotTarget.Base : SlotTarget.Alt;
+        if (from == SlotTarget.Keep)
+        {
+            if (live.Any(a => a.PackageName.Contains("/Extnd", StringComparison.OrdinalIgnoreCase)))
+                log.Warn("Character slot: this mod replaces a guest character; moving between base and alternate slots only works for the main cast. Left in its own slot.");
+            else log.Warn("Character slot: couldn't tell which main-cast character slot this mod is made for (no character model or select-screen icons found). Left as is.");
+            return;
+        }
+        if (from == target) { log.Info($"Character slot: the mod already replaces the {(from == SlotTarget.Base ? "base" : "alternate")} slot; nothing to move."); return; }
+        if (ch == null && abbr == null) { log.Warn("Character slot: no files to move."); return; }
+
+        string baseDir = ch == null ? null : CharRoot + ch + "/", altDir = ch == null ? null : CharRoot + "Skin/" + ch + "Skin/";
+        // name changes: ShadowSkin <-> Shadow (whole word), sha_02 <-> sha_01
+        string RenameName(string n)
+        {
+            var r = n;
+            if (ch != null)
+                r = from == SlotTarget.Alt
+                    ? System.Text.RegularExpressions.Regex.Replace(r, "(?<![A-Za-z])" + ch + "Skin(?=$|[^a-z]|side)", ch)
+                    : System.Text.RegularExpressions.Regex.Replace(r, "(?<![A-Za-z])" + ch + "(?!Skin)(?=$|[^a-z]|side)", ch + "Skin");
+            if (abbr != null)
+                r = System.Text.RegularExpressions.Regex.Replace(r, "(?<=_" + abbr + "_)0" + (from == SlotTarget.Alt ? "2" : "1") + "$", "0" + (from == SlotTarget.Alt ? "1" : "2"), System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return r;
+        }
+        string RenamePkg(string pkg)
+        {
+            var dir = pkg[..(pkg.LastIndexOf('/') + 1)]; var name = pkg[(pkg.LastIndexOf('/') + 1)..];
+            string srcDir = from == SlotTarget.Alt ? altDir : baseDir, dstDir = from == SlotTarget.Alt ? baseDir : altDir;
+            bool inSlotDir = srcDir != null && dir.StartsWith(srcDir, StringComparison.OrdinalIgnoreCase);
+            bool slotUi = abbr != null && System.Text.RegularExpressions.Regex.IsMatch(name, "^UI_.*_" + abbr + "_0[12]$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!inSlotDir && !slotUi) return pkg;
+            return (inSlotDir ? dstDir + dir[srcDir.Length..] : dir) + RenameName(name);
+        }
+
+        // 1) the mod's own packages
+        var pkgMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var nameMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var a in live)
+        {
+            var np = RenamePkg(a.PackageName); if (np == a.PackageName) continue;
+            if (byPackage.TryGetValue(np, out var clash) && !clash.Removed && clash != a)
+            {   // never move only part of a skin: a half-moved model mixes two versions
+                log.Warn($"Character slot: {a.ShortName} would land on {np}, which the mod already has (it includes files for the other slot). Nothing was moved.");
+                return;
+            }
+            pkgMap[a.PackageName] = np;
+            foreach (var e in a.Asset.Exports) { var en = Str(e.ObjectName); var nn = RenameName(en); if (nn != en) nameMap[en] = nn; }
+        }
+        // 2) the game's own assets in the old slot: switched only when the name database confirms the other slot has them
+        int kept = 0, switched = 0;
+        foreach (var a in live)
+            foreach (var imp in a.Asset.Imports.Where(i => i.OuterIndex.Index == 0))
+            {
+                var pn = Str(imp.ObjectName); if (pkgMap.ContainsKey(pn) || byPackage.ContainsKey(pn) || !pn.StartsWith(CharRoot)) continue;
+                var np = RenamePkg(pn); if (np == pn) continue;
+                if (db != null && db.Packages.ContainsKey($"{CityHash.PackageId(np):x16}"))
+                {
+                    pkgMap[pn] = np; switched++;
+                    foreach (var oi in a.Asset.Imports.Where(i => i.OuterIndex.IsImport() && Str(Outer(a.Asset, i)?.ObjectName) == pn))
+                    { var on = Str(oi.ObjectName); var nn = RenameName(on); if (nn != on) nameMap[on] = nn; }
+                }
+                else kept++;
+            }
+
+        // 3) rewrite every asset of the mod
+        foreach (var a in live)
+        {
+            var u = new UAsset(a.Path, EngineVersion.VER_UE5_4); bool changed = false;
+            var names = u.GetNameMapIndexList();
+            for (int i = 0; i < names.Count; i++)
+            {
+                var v = names[i].Value;
+                if (pkgMap.TryGetValue(v, out var np)) { u.SetNameReference(i, new FString(np)); changed = true; }
+                else if (nameMap.TryGetValue(v, out var nn)) { u.SetNameReference(i, new FString(nn)); changed = true; }
+            }
+            // names stored as "base + number" (Material__73 = "Material_" #74) aren't found by the plain text above
+            foreach (var im in u.Imports)
+            {
+                var full = Str(im.ObjectName); if (im.ObjectName == null || im.ObjectName.Number == 0) continue;
+                if (pkgMap.TryGetValue(full, out var np2)) { im.ObjectName = N(u, np2); changed = true; }
+                else if (nameMap.TryGetValue(full, out var nn2)) { im.ObjectName = N(u, nn2); changed = true; }
+            }
+            foreach (var ex in u.Exports)
+            {
+                var full = Str(ex.ObjectName); if (ex.ObjectName == null || ex.ObjectName.Number == 0) continue;
+                if (nameMap.TryGetValue(full, out var nn3)) { ex.ObjectName = N(u, nn3); changed = true; }
+            }
+            if (pkgMap.TryGetValue(a.PackageName, out var newPkg)) { u.FolderName = new FString(newPkg); changed = true; }
+            if (!changed) continue;
+            if (newPkg != null)
+            {
+                var oldPath = a.Path;
+                var newRel = CanonicalRel(newPkg, Path.GetExtension(a.Path));
+                var newPath = Path.Combine(Path.GetDirectoryName(a.Path[..^a.RelPath.Length].TrimEnd('/', '\\')) ?? "", "retarget", newRel);
+                Directory.CreateDirectory(Path.GetDirectoryName(newPath));
+                u.Write(newPath);
+                foreach (var ext in new[] { ".ubulk", ".uptnl" }) { var f = Path.ChangeExtension(oldPath, ext); if (File.Exists(f)) File.Copy(f, Path.ChangeExtension(newPath, ext), true); }
+                byPackage.Remove(a.PackageName);
+                a.Path = newPath; a.RelPath = newRel; a.PackageName = newPkg; a.Asset = new UAsset(newPath, EngineVersion.VER_UE5_4);
+                byPackage[newPkg] = a;
+            }
+            else { u.Write(a.Path); a.Asset = new UAsset(a.Path, EngineVersion.VER_UE5_4); }
+        }
+        foreach (var k in pkgMap.Keys) movedAway.Add(k);
+        foreach (var ev in extraVersions.Where(x => pkgMap.ContainsKey(x.PackageName)))
+            log.Warn($"Character slot: {ev.ShortName} has a second version in {ev.Container}; that copy was not moved.");
+
+        var where = from == SlotTarget.Alt ? "alternate (AI) slot" : "base slot";
+        var to = target == SlotTarget.Base ? "base slot" : "alternate (AI) slot";
+        log.Change($"Character slot: moved this skin from {(ch ?? abbr)}'s {where} to the {to} ({pkgMap.Count(kv => byPackage.ContainsKey(kv.Value))} file(s) moved/renamed{(abbr != null ? $", select-screen icons _{abbr}_0{(from == SlotTarget.Alt ? 2 : 1)} -> _0{(target == SlotTarget.Base ? 1 : 2)}" : "")}).");
+        if (switched > 0) log.Change($"Character slot: {switched} reference(s) to the game's own {where} assets switched to the {to} versions (confirmed by the name database).");
+        if (kept > 0) log.Info($"Character slot: {kept} reference(s) to the game's own {where} assets (physics, skeleton...) were kept{(db == null ? " - build the name database to switch them to the other slot's versions" : " - the other slot has no matching asset")}. Usually fine; if the character T-poses, use the other slot.");
+        if (target == SlotTarget.Alt && db == null)
+            log.Warn("Character slot: not every main-cast character has an alternate (AI) version. If nothing changes in game, this character has none - convert again with the base slot.");
     }
 
     /// <summary>Renames a MorphTarget export of a mesh (Name -> Name_Off) so no curve or AnimBP can find and drive it.</summary>
@@ -1339,6 +1572,13 @@ public class Converter
         if (e == null) return false;
         u.AddNameReference(new FString(morph + "_Off"));
         e.ObjectName = N(u, morph + "_Off");
+        // and take it out of the mesh's morph list: some platforms render a part with morph data through the
+        // morph-capable path (which the game's materials don't support -> default gray material) even when unused
+        if (mesh.MainExport is NormalExport me && me.Data.FirstOrDefault(p => Str(p.Name) == "MorphTargets") is ArrayPropertyData arr)
+        {
+            int ei = u.Exports.IndexOf(e) + 1;
+            arr.Value = arr.Value.Where(v => !(v is ObjectPropertyData op && op.Value.Index == ei)).ToArray();
+        }
         mesh.Dirty = true;
         return true;
     }

@@ -34,6 +34,7 @@ public class MainForm : Form
         sec.RefreshSummary(); parent.Controls.Add(sec); sections.Add(sec);
         return sec;
     }
+    readonly ComboBox cSlotTarget = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 380 };
     readonly CheckBox chkShared = new() { Text = "Include shared game blueprints (risky: can break other characters)", AutoSize = true };
     readonly Label lDb = new() { AutoSize = true, ForeColor = Color.DimGray };
     readonly RichTextBox log = new() { ReadOnly = true, BackColor = Color.White, Font = new Font("Consolas", 9f), WordWrap = true, BorderStyle = BorderStyle.FixedSingle };
@@ -88,9 +89,15 @@ public class MainForm : Form
         cg.Controls.Add(new Label { Text = "Transparency material", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
         cAlpha.Items.AddRange(new object[] { "Auto (recommended)", "Never - always the normal material", "Always - transparency material for textures with alpha" }); cAlpha.Width = 380;
         cg.Controls.Add(cAlpha); cg.Controls.Add(new Label { AutoSize = true });
+        cg.Controls.Add(new Label { Text = "Character slot", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 8, 3) });
+        cSlotTarget.Items.AddRange(new object[] { "Keep the slot the mod was made for", "Base character", "Alternate / AI version" }); cSlotTarget.SelectedIndex = 0;
+        cg.Controls.Add(cSlotTarget); cg.Controls.Add(new Label { AutoSize = true });
+        var slotHelp = new Label { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(3, 0, 3, 6),
+            Text = "Main-cast characters only (e.g. a skin made for AI Shadow can go on base Shadow, or the other way). Guest characters keep their slot." };
+        cg.Controls.Add(new Label { AutoSize = true }); cg.Controls.Add(slotHelp); cg.Controls.Add(new Label { AutoSize = true }); wrapLabels.Add(slotHelp);
         cg.Controls.Add(new Label { AutoSize = true }); cg.Controls.Add(chkShared); cg.Controls.Add(new Label { AutoSize = true });
         var secConv = AddSection(content, "Conversion settings", cg, s.OpenConversion, v => s.OpenConversion = v,
-            () => $"Max texture: {cTex.Text}   ·   Transparency: {cAlpha.Text.Split(' ')[0]}{(chkShared.Checked ? "   ·   shared blueprints included" : "")}");
+            () => $"Max texture: {cTex.Text}   ·   Transparency: {cAlpha.Text.Split(' ')[0]}{(cSlotTarget.SelectedIndex > 0 ? "   ·   Slot: " + cSlotTarget.Text : "")}{(chkShared.Checked ? "   ·   shared blueprints included" : "")}");
 
         // --- character name
         var ngt = Grid();
@@ -119,7 +126,7 @@ public class MainForm : Form
         secDb = AddSection(content, "Game name database (optional)", dbg, s.OpenDatabase, v => s.OpenDatabase = v, () => lDb.Text);
 
         cTex.SelectedIndexChanged += (_, _) => secConv.RefreshSummary(); cAlpha.SelectedIndexChanged += (_, _) => secConv.RefreshSummary();
-        chkShared.CheckedChanged += (_, _) => secConv.RefreshSummary(); tName.TextChanged += (_, _) => secName.RefreshSummary();
+        chkShared.CheckedChanged += (_, _) => secConv.RefreshSummary(); cSlotTarget.SelectedIndexChanged += (_, _) => secConv.RefreshSummary(); tName.TextChanged += (_, _) => secName.RefreshSummary();
 
         // --- bottom: buttons, progress, log
         var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(14, 6, 14, 12) };
@@ -176,7 +183,7 @@ public class MainForm : Form
         if (!File.Exists(Retoc)) Line(Level.Error, $"bin\\retoc.exe is missing next to the program ({Retoc}). Re-extract the zip.");
     }
 
-    void SetMod(string p) { tMod.Text = p; tOut.Text = Path.Combine(p, "Switch port"); slotsLoadedFor = null; LoadOpts(); }
+    void SetMod(string p) { tMod.Text = p; tOut.Text = Path.Combine(p, "Switch port"); slotsLoadedFor = null; cSlotTarget.SelectedIndex = 0; LoadOpts(); }
 
     void LoadOpts()
     {
@@ -273,6 +280,7 @@ public class MainForm : Form
         var l = new Log(); l.OnLine += Line;
         var o = new Options { ModDir = tMod.Text, GlobalDir = tGlobal.Text, OutputDir = tOut.Text, RetocPath = Retoc, MaxTextureSize = MaxTex,
                               Transparency = (TransparencyMode)Math.Max(0, cAlpha.SelectedIndex), IncludeSharedBlueprints = chkShared.Checked,
+                              Slot = (SlotTarget)Math.Max(0, cSlotTarget.SelectedIndex),
                               NameDbPath = File.Exists(Settings.NamesPath) ? Settings.NamesPath : null,
                               NewName = string.IsNullOrWhiteSpace(tName.Text) ? null : tName.Text.Trim(),
                               NameKey = cSlot.SelectedIndex > 0 ? ((string)cSlot.SelectedItem).Split(' ')[0] : null,
